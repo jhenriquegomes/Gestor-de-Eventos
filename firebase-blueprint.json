@@ -1,0 +1,92 @@
+{
+  "entities": {
+    "Event": {
+      "title": "Event",
+      "description": "An event managed by the user.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "date": { "type": "string" },
+        "days": { "type": "number" },
+        "location": { "type": "string" },
+        "uid": { "type": "string", "description": "The UID of the user who owns this event." }
+      },
+      "required": ["id", "name", "date", "days", "location", "uid"]
+    },
+    "Transport": {
+      "title": "Transport",
+      "description": "A transport option for an event.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "eventId": { "type": "string" },
+        "type": { "type": "string" },
+        "capacity": { "type": "number" },
+        "pricePerPerson": { "type": "number" },
+        "uid": { "type": "string", "description": "The UID of the user who owns this transport." }
+      },
+      "required": ["id", "eventId", "type", "capacity", "pricePerPerson", "uid"]
+    },
+    "Person": {
+      "title": "Person",
+      "description": "A person registered in the system.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "eventId": { "type": "string" },
+        "name": { "type": "string" },
+        "phone": { "type": "string" },
+        "isCaptain": { "type": "boolean" },
+        "order": { "type": "number", "description": "The display order of the person." },
+        "uid": { "type": "string", "description": "The UID of the user who owns this person record." }
+      },
+      "required": ["id", "eventId", "name", "phone", "uid"]
+    },
+    "Payment": {
+      "title": "Payment",
+      "description": "A payment record for an event and person.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "eventId": { "type": "string" },
+        "personId": { "type": "string" },
+        "amountPaid": { "type": "number" },
+        "uid": { "type": "string", "description": "The UID of the user who owns this payment record." }
+      },
+      "required": ["id", "eventId", "personId", "amountPaid", "uid"]
+    },
+    "UserSettings": {
+      "title": "UserSettings",
+      "description": "User specific settings like PIX key and payment message.",
+      "type": "object",
+      "properties": {
+        "pixKey": { "type": "string" },
+        "paymentMessage": { "type": "string" }
+      },
+      "required": ["pixKey", "paymentMessage"]
+    }
+  },
+  "firestore": {
+    "/events/{eventId}": {
+      "schema": "Event",
+      "description": "Collection of events."
+    },
+    "/transports/{transportId}": {
+      "schema": "Transport",
+      "description": "Collection of transports."
+    },
+    "/people/{personId}": {
+      "schema": "Person",
+      "description": "Collection of people."
+    },
+    "/payments/{paymentId}": {
+      "schema": "Payment",
+      "description": "Collection of payments."
+    },
+    "/userSettings/{userId}": {
+      "schema": "UserSettings",
+      "description": "User specific settings."
+    }
+  }
+}

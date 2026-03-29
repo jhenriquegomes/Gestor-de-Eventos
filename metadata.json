@@ -1,0 +1,5 @@
+{
+  "name": "Gestor de Eventos",
+  "description": "Aplicativo para cadastro e gerenciamento de eventos com nome, data e local.",
+  "requestFramePermissions": []
+}

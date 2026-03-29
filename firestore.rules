@@ -1,0 +1,190 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ===============================================================
+    // Assumed Data Model
+    // ===============================================================
+    //
+    // Collection: events
+    // Document ID: eventId
+    // Fields:
+    //   - id: string (required)
+    //   - name: string (required, size < 100)
+    //   - date: string (required, ISO 8601 format)
+    //   - days: number (required, > 0)
+    //   - location: string (required, size < 200)
+    //   - uid: string (required, immutable)
+    //
+    // Collection: transports
+    // Document ID: transportId
+    // Fields:
+    //   - id: string (required)
+    //   - eventId: string (required)
+    //   - type: string (required, size < 50)
+    //   - capacity: number (required, > 0)
+    //   - pricePerPerson: number (required, >= 0)
+    //   - uid: string (required, immutable)
+    //
+    // Collection: people
+    // Document ID: personId
+    // Fields:
+    //   - id: string (required)
+    //   - eventId: string (required)
+    //   - name: string (required, size < 100)
+    //   - phone: string (required, size < 20)
+    //   - isCaptain: boolean (optional)
+    //   - order: number (optional)
+    //   - uid: string (required, immutable)
+    //
+    // Collection: payments
+    // Document ID: paymentId
+    // Fields:
+    //   - id: string (required)
+    //   - eventId: string (required)
+    //   - personId: string (required)
+    //   - amountPaid: number (required, >= 0)
+    //   - uid: string (required, immutable)
+    //
+    // Collection: userSettings
+    // Document ID: userId
+    // Fields:
+    //   - pixKey: string (required, size < 100)
+    //   - paymentMessage: string (required, size < 1000)
+    //
+    // ===============================================================
+
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function isDocOwner() {
+      return isAuthenticated() && request.auth.uid == resource.data.uid;
+    }
+
+    function uidUnchanged() {
+      return !('uid' in request.resource.data) || request.resource.data.uid == request.auth.uid;
+    }
+
+    function uidNotModified() {
+      return !('uid' in request.resource.data) || request.resource.data.uid == resource.data.uid;
+    }
+
+    function hasRequiredFields(fields) {
+      return request.resource.data.keys().hasAll(fields);
+    }
+
+    function hasOnlyAllowedFields(fields) {
+      return request.resource.data.keys().hasOnly(fields);
+    }
+
+    function isValidDateString(dateStr) {
+      return dateStr is string && dateStr.matches("^\\d{4}-\\d{2}-\\d{2}.*");
+    }
+
+    // ===============================================================
+    // Domain Validators
+    // ===============================================================
+
+    function isValidEvent(data) {
+      return hasRequiredFields(['id', 'name', 'date', 'days', 'location', 'uid']) &&
+             hasOnlyAllowedFields(['id', 'name', 'date', 'days', 'location', 'uid']) &&
+             data.id is string &&
+             data.name is string && data.name.size() > 0 && data.name.size() < 100 &&
+             isValidDateString(data.date) &&
+             data.days is number && data.days > 0 &&
+             data.location is string && data.location.size() > 0 && data.location.size() < 200 &&
+             data.uid is string && data.uid == request.auth.uid;
+    }
+
+    function isValidTransport(data) {
+      return hasRequiredFields(['id', 'eventId', 'type', 'capacity', 'pricePerPerson', 'uid']) &&
+             hasOnlyAllowedFields(['id', 'eventId', 'type', 'capacity', 'pricePerPerson', 'uid']) &&
+             data.id is string &&
+             data.eventId is string &&
+             data.type is string && data.type.size() > 0 && data.type.size() < 50 &&
+             data.capacity is number && data.capacity > 0 &&
+             data.pricePerPerson is number && data.pricePerPerson >= 0 &&
+             data.uid is string && data.uid == request.auth.uid;
+    }
+
+    function isValidPerson(data) {
+      return hasRequiredFields(['id', 'eventId', 'name', 'phone', 'uid']) &&
+             hasOnlyAllowedFields(['id', 'eventId', 'name', 'phone', 'isCaptain', 'order', 'uid']) &&
+             data.id is string &&
+             data.eventId is string &&
+             data.name is string && data.name.size() > 0 && data.name.size() < 100 &&
+             data.phone is string && data.phone.size() > 0 && data.phone.size() < 20 &&
+             (data.get('isCaptain', false) is bool) &&
+             (data.get('order', 0) is number) &&
+             data.uid is string && data.uid == request.auth.uid;
+    }
+
+    function isValidPayment(data) {
+      return hasRequiredFields(['id', 'eventId', 'personId', 'amountPaid', 'uid']) &&
+             hasOnlyAllowedFields(['id', 'eventId', 'personId', 'amountPaid', 'uid']) &&
+             data.id is string &&
+             data.eventId is string &&
+             data.personId is string &&
+             data.amountPaid is number && data.amountPaid >= 0 &&
+             data.uid is string && data.uid == request.auth.uid;
+    }
+
+    function isValidUserSettings(data) {
+      return hasRequiredFields(['pixKey', 'paymentMessage']) &&
+             hasOnlyAllowedFields(['pixKey', 'paymentMessage']) &&
+             data.pixKey is string && data.pixKey.size() < 100 &&
+             data.paymentMessage is string && data.paymentMessage.size() < 1000;
+    }
+
+    // ===============================================================
+    // Rules
+    // ===============================================================
+
+    match /events/{eventId} {
+      allow read: if isDocOwner();
+      allow create: if isAuthenticated() && isValidEvent(request.resource.data);
+      allow update: if isDocOwner() && isValidEvent(request.resource.data) && uidNotModified();
+      allow delete: if isDocOwner();
+    }
+
+    match /transports/{transportId} {
+      allow read: if isDocOwner();
+      allow create: if isAuthenticated() && isValidTransport(request.resource.data);
+      allow update: if isDocOwner() && isValidTransport(request.resource.data) && uidNotModified();
+      allow delete: if isDocOwner();
+    }
+
+    match /people/{personId} {
+      allow read: if isDocOwner();
+      allow create: if isAuthenticated() && isValidPerson(request.resource.data);
+      allow update: if isDocOwner() && isValidPerson(request.resource.data) && uidNotModified();
+      allow delete: if isDocOwner();
+    }
+
+    match /payments/{paymentId} {
+      allow read: if isDocOwner();
+      allow create: if isAuthenticated() && isValidPayment(request.resource.data);
+      allow update: if isDocOwner() && isValidPayment(request.resource.data) && uidNotModified();
+      allow delete: if isDocOwner();
+    }
+
+    match /userSettings/{userId} {
+      allow read: if isOwner(userId);
+      allow create, update: if isOwner(userId) && isValidUserSettings(request.resource.data);
+    }
+
+    // Default deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
