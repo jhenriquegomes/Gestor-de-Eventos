@@ -124,7 +124,7 @@ interface Payment {
 export default function App() {
   const [user, setUser] = useState<FirebaseUser | null>(null);
   const [isAuthReady, setIsAuthReady] = useState(false);
-  const [activeTab, setActiveTab] = useState<'events' | 'people'>('events');
+  const [activeTab, setActiveTab] = useState<'events'>('events');
   const [events, setEvents] = useState<Event[]>([]);
   const [transports, setTransports] = useState<Transport[]>([]);
   const [people, setPeople] = useState<Person[]>([]);
@@ -178,6 +178,26 @@ export default function App() {
   const [pixKey, setPixKey] = useState('');
   const [paymentMessage, setPaymentMessage] = useState('Olá {nome}, tudo bem? Estou passando para lembrar do pagamento do evento {evento}. O valor pendente é de R$ {valor}. Chave PIX: {pix}');
   const [showSettingsModal, setShowSettingsModal] = useState(false);
+
+  const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
+
+  useEffect(() => {
+    const handleBeforeInstallPrompt = (e: any) => {
+      e.preventDefault();
+      setDeferredPrompt(e);
+    };
+    window.addEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
+    return () => window.removeEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
+  }, []);
+
+  const handleInstallClick = async () => {
+    if (!deferredPrompt) return;
+    deferredPrompt.prompt();
+    const { outcome } = await deferredPrompt.userChoice;
+    if (outcome === 'accepted') {
+      setDeferredPrompt(null);
+    }
+  };
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
@@ -286,32 +306,37 @@ export default function App() {
   };
 
   const generateOrderedPDF = () => {
+    const event = events.find(e => e.id === selectedEventId);
+    if (!event) return;
+
     const doc = new jsPDF();
-    const title = `Lista de Pessoas Ordenada`;
-    const date = new Date().toLocaleDateString('pt-BR');
+    const title = `Lista de Embarque: ${event.name}`;
+    const dateStr = `Data: ${new Date(event.date + 'T00:00:00').toLocaleDateString('pt-BR')}`;
+    const daysStr = `Duração: ${event.days} dia(s)`;
 
     doc.setFontSize(18);
     doc.text(title, 14, 22);
     doc.setFontSize(11);
-    doc.text(`Data de Geração: ${date}`, 14, 30);
+    doc.text(dateStr, 14, 30);
+    doc.text(daysStr, 14, 36);
 
-    const headers = [['#', 'Nome', 'Telefone']];
+    const headers = [['#', 'Nome', ...Array.from({ length: event.days }, (_, i) => [`Dia ${i + 1} (Ida)`, `Dia ${i + 1} (Volta)`]).flat()]];
     const data = people.map((p, index) => [
       (index + 1).toString(),
       p.name,
-      p.phone
+      ...Array.from({ length: event.days * 2 }, () => '[ ]')
     ]);
 
     autoTable(doc, {
       head: headers,
       body: data,
-      startY: 40,
+      startY: 45,
       theme: 'grid',
       headStyles: { fillColor: [79, 70, 229] },
-      styles: { fontSize: 10, cellPadding: 3 },
+      styles: { fontSize: event.days > 2 ? 7 : 9, cellPadding: 2 },
     });
 
-    doc.save(`lista_ordenada_${date.replace(/\//g, '-')}.pdf`);
+    doc.save(`lista_ordenada_${event.name.toLowerCase().replace(/\s+/g, '_')}.pdf`);
   };
 
   const updatePeopleOrder = async (newOrder: Person[]) => {
@@ -615,9 +640,38 @@ export default function App() {
 
   const deleteEvent = async (id: string) => {
     try {
+      // Delete the event itself
       await deleteDoc(doc(db, 'events', id));
-      // Payments and transports should ideally be deleted too, but for simplicity we'll just delete the event
-      // In a real app, you'd use a batch or cloud function to clean up related data.
+      
+      // Clean up related data
+      // Transports
+      const qTransports = query(collection(db, 'transports'), where('eventId', '==', id));
+      const transportDocs = transports.filter(t => t.eventId === id);
+      for (const t of transportDocs) {
+        await deleteDoc(doc(db, 'transports', t.id));
+      }
+
+      // People
+      const qPeople = query(collection(db, 'people'), where('eventId', '==', id));
+      const peopleDocs = people.filter(p => p.eventId === id);
+      for (const p of peopleDocs) {
+        await deleteDoc(doc(db, 'people', p.id));
+      }
+
+      // Payments
+      const qPayments = query(collection(db, 'payments'), where('eventId', '==', id));
+      const paymentDocs = payments.filter(p => p.eventId === id);
+      for (const p of paymentDocs) {
+        await deleteDoc(doc(db, 'payments', p.id));
+      }
+
+      if (selectedEventId === id) {
+        setSelectedEventId(null);
+      }
+      
+      setSuccessMessage('Evento e dados relacionados excluídos com sucesso!');
+      setShowSuccess(true);
+      setTimeout(() => setShowSuccess(false), 3000);
     } catch (error) {
       handleFirestoreError(error, OperationType.DELETE, `events/${id}`);
     }
@@ -626,6 +680,9 @@ export default function App() {
   const deleteTransport = async (id: string) => {
     try {
       await deleteDoc(doc(db, 'transports', id));
+      setSuccessMessage('Transporte excluído com sucesso!');
+      setShowTransportSuccess(true);
+      setTimeout(() => setShowTransportSuccess(false), 3000);
     } catch (error) {
       handleFirestoreError(error, OperationType.DELETE, `transports/${id}`);
     }
@@ -634,6 +691,16 @@ export default function App() {
   const deletePerson = async (id: string) => {
     try {
       await deleteDoc(doc(db, 'people', id));
+      
+      // Clean up related payments
+      const personPayments = payments.filter(p => p.personId === id);
+      for (const p of personPayments) {
+        await deleteDoc(doc(db, 'payments', p.id));
+      }
+      
+      setSuccessMessage('Passageiro e pagamentos excluídos com sucesso!');
+      setShowPersonSuccess(true);
+      setTimeout(() => setShowPersonSuccess(false), 3000);
     } catch (error) {
       handleFirestoreError(error, OperationType.DELETE, `people/${id}`);
     }
@@ -642,6 +709,9 @@ export default function App() {
   const deletePayment = async (id: string) => {
     try {
       await deleteDoc(doc(db, 'payments', id));
+      setSuccessMessage('Pagamento excluído com sucesso!');
+      setShowPaymentSuccess(true);
+      setTimeout(() => setShowPaymentSuccess(false), 3000);
     } catch (error) {
       handleFirestoreError(error, OperationType.DELETE, `payments/${id}`);
     }
@@ -690,18 +760,19 @@ export default function App() {
             Gestor de Eventos
           </h1>
           <div className="flex items-center gap-3">
-            <div className="flex bg-zinc-100 p-1 rounded-lg overflow-x-auto max-w-full">
+            <div className="flex bg-zinc-100/80 backdrop-blur-sm p-1.5 rounded-xl overflow-x-auto max-w-full no-scrollbar shadow-inner">
               <button
                 onClick={() => {
                   setActiveTab('events');
                   setSelectedEventId(null);
                 }}
-                className={`px-6 py-1.5 rounded-md text-sm font-medium transition-all whitespace-nowrap ${
+                className={`flex items-center gap-2 px-6 py-2 rounded-lg text-sm font-bold transition-all whitespace-nowrap ${
                   activeTab === 'events' 
-                  ? 'bg-white text-zinc-900 shadow-sm' 
+                  ? 'bg-white text-indigo-600 shadow-sm' 
                   : 'text-zinc-500 hover:text-zinc-700'
                 }`}
               >
+                <Calendar className="w-4 h-4" />
                 Eventos
               </button>
             </div>
@@ -906,15 +977,19 @@ export default function App() {
                           <div className="flex gap-1" onClick={e => e.stopPropagation()}>
                             <button
                               onClick={() => startEditEvent(event)}
-                              className="p-1.5 text-zinc-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-all"
-                              title="Editar evento"
+                              className="p-2 text-zinc-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-all active:scale-90"
+                              title="Editar Evento"
                             >
                               <Edit2 className="w-4 h-4" />
                             </button>
                             <button
-                              onClick={() => deleteEvent(event.id)}
-                              className="p-1.5 text-zinc-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-all"
-                              title="Excluir evento"
+                              onClick={() => {
+                                if (window.confirm('Tem certeza que deseja excluir este evento?')) {
+                                  deleteEvent(event.id);
+                                }
+                              }}
+                              className="p-2 text-zinc-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-all active:scale-90"
+                              title="Excluir Evento"
                             >
                               <Trash2 className="w-4 h-4" />
                             </button>
@@ -937,42 +1012,54 @@ export default function App() {
                 <div className="flex items-center justify-between">
                   <button
                     onClick={() => setSelectedEventId(null)}
-                    className="flex items-center gap-2 text-zinc-500 hover:text-zinc-900 font-medium transition-colors"
+                    className="flex items-center gap-2 text-zinc-500 hover:text-indigo-600 font-bold text-sm transition-all active:scale-95 px-2 py-1 rounded-lg hover:bg-indigo-50"
                   >
                     <Plus className="w-4 h-4 rotate-45" />
-                    Voltar para Eventos
+                    Voltar
                   </button>
-                  <div className="flex bg-zinc-100 p-1 rounded-lg overflow-x-auto max-w-full">
+                  <div className="flex bg-zinc-100/80 backdrop-blur-sm p-1.5 rounded-xl overflow-x-auto max-w-full no-scrollbar shadow-inner">
                     <button
                       onClick={() => setEventViewTab('transport')}
-                      className={`px-4 py-1.5 rounded-md text-[10px] font-bold uppercase tracking-wider transition-all whitespace-nowrap ${
-                        eventViewTab === 'transport' ? 'bg-white text-zinc-900 shadow-sm' : 'text-zinc-500'
+                      className={`flex items-center gap-2 px-4 py-2.5 rounded-lg text-[11px] font-bold uppercase tracking-wider transition-all whitespace-nowrap ${
+                        eventViewTab === 'transport' 
+                        ? 'bg-white text-indigo-600 shadow-sm' 
+                        : 'text-zinc-500 hover:text-zinc-700'
                       }`}
                     >
+                      <Bus className="w-3.5 h-3.5" />
                       Transporte
                     </button>
                     <button
                       onClick={() => setEventViewTab('people')}
-                      className={`px-4 py-1.5 rounded-md text-[10px] font-bold uppercase tracking-wider transition-all whitespace-nowrap ${
-                        eventViewTab === 'people' ? 'bg-white text-zinc-900 shadow-sm' : 'text-zinc-500'
+                      className={`flex items-center gap-2 px-4 py-2.5 rounded-lg text-[11px] font-bold uppercase tracking-wider transition-all whitespace-nowrap ${
+                        eventViewTab === 'people' 
+                        ? 'bg-white text-indigo-600 shadow-sm' 
+                        : 'text-zinc-500 hover:text-zinc-700'
                       }`}
                     >
+                      <Users className="w-3.5 h-3.5" />
                       Pessoas
                     </button>
                     <button
                       onClick={() => setEventViewTab('payments')}
-                      className={`px-4 py-1.5 rounded-md text-[10px] font-bold uppercase tracking-wider transition-all whitespace-nowrap ${
-                        eventViewTab === 'payments' ? 'bg-white text-zinc-900 shadow-sm' : 'text-zinc-500'
+                      className={`flex items-center gap-2 px-4 py-2.5 rounded-lg text-[11px] font-bold uppercase tracking-wider transition-all whitespace-nowrap ${
+                        eventViewTab === 'payments' 
+                        ? 'bg-white text-indigo-600 shadow-sm' 
+                        : 'text-zinc-500 hover:text-zinc-700'
                       }`}
                     >
+                      <DollarSign className="w-3.5 h-3.5" />
                       Pagamentos
                     </button>
                     <button
                       onClick={() => setEventViewTab('ordered-list')}
-                      className={`px-4 py-1.5 rounded-md text-[10px] font-bold uppercase tracking-wider transition-all whitespace-nowrap ${
-                        eventViewTab === 'ordered-list' ? 'bg-white text-zinc-900 shadow-sm' : 'text-zinc-500'
+                      className={`flex items-center gap-2 px-4 py-2.5 rounded-lg text-[11px] font-bold uppercase tracking-wider transition-all whitespace-nowrap ${
+                        eventViewTab === 'ordered-list' 
+                        ? 'bg-white text-indigo-600 shadow-sm' 
+                        : 'text-zinc-500 hover:text-zinc-700'
                       }`}
                     >
+                      <List className="w-3.5 h-3.5" />
                       Lista Ordenada
                     </button>
                   </div>
@@ -1022,33 +1109,7 @@ export default function App() {
                           </div>
                         </div>
 
-                        {/* PDF Actions */}
-                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                          <button
-                            onClick={generateCheckInPDF}
-                            className="flex items-center justify-center gap-2 px-4 py-2.5 bg-white border border-zinc-200 hover:border-indigo-200 text-zinc-700 hover:text-indigo-600 rounded-xl font-bold text-[11px] md:text-sm transition-all active:scale-95 shadow-sm"
-                          >
-                            <FileText className="w-4 h-4 md:w-5 h-5" />
-                            Baixar Lista (PDF)
-                          </button>
-                          <button
-                            onClick={sendPDFToCaptain}
-                            disabled={!people.some(p => p.isCaptain)}
-                            className={`flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl font-bold text-[11px] md:text-sm transition-all active:scale-95 shadow-sm ${
-                              people.some(p => p.isCaptain)
-                              ? 'bg-emerald-500 hover:bg-emerald-600 text-white shadow-emerald-100'
-                              : 'bg-zinc-100 text-zinc-400 cursor-not-allowed'
-                            }`}
-                          >
-                            <MessageCircle className="w-4 h-4 md:w-5 h-5" />
-                            Enviar ao Capitão
-                          </button>
-                          {!people.some(p => p.isCaptain) && (
-                            <p className="text-[10px] text-zinc-400 text-center sm:col-span-2 italic">
-                              * Defina uma pessoa como Capitão na aba "Pessoas" para habilitar o envio.
-                            </p>
-                          )}
-                        </div>
+
                       </div>
                     )}
                   </div>
@@ -1171,8 +1232,24 @@ export default function App() {
                               </div>
                             </div>
                             <div className="flex gap-1 md:gap-2">
-                              <button onClick={() => startEditTransport(transport)} className="p-1.5 text-zinc-400 hover:text-indigo-600"><Edit2 className="w-4 h-4 md:w-5 h-5" /></button>
-                              <button onClick={() => deleteTransport(transport.id)} className="p-1.5 text-zinc-400 hover:text-red-500"><Trash2 className="w-4 h-4 md:w-5 h-5" /></button>
+                              <button
+                                onClick={() => startEditTransport(transport)}
+                                className="p-2 text-zinc-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-all active:scale-90"
+                                title="Editar Transporte"
+                              >
+                                <Edit2 className="w-4 h-4" />
+                              </button>
+                              <button
+                                onClick={() => {
+                                  if (window.confirm('Tem certeza que deseja excluir este transporte?')) {
+                                    deleteTransport(transport.id);
+                                  }
+                                }}
+                                className="p-2 text-zinc-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-all active:scale-90"
+                                title="Excluir Transporte"
+                              >
+                                <Trash2 className="w-4 h-4" />
+                              </button>
                             </div>
                           </div>
                         ))}
@@ -1184,12 +1261,12 @@ export default function App() {
                     <div className="space-y-6">
                       <div className="flex items-center justify-between px-1">
                         <h3 className="text-lg font-semibold text-zinc-900">Passageiros do Evento</h3>
-                        <div className="flex gap-2">
+                        <div className="flex flex-col sm:flex-row gap-2">
                           <button
                             onClick={() => setShowImportModal(true)}
-                            className="flex items-center gap-1.5 px-3 py-1.5 bg-zinc-100 text-zinc-600 rounded-lg hover:bg-zinc-200 transition-all text-xs font-bold"
+                            className="flex items-center justify-center gap-2 px-4 py-2.5 bg-zinc-100 text-zinc-600 rounded-xl hover:bg-zinc-200 transition-all text-xs font-bold w-full sm:w-auto active:scale-95"
                           >
-                            <FileUp className="w-3.5 h-3.5" />
+                            <FileUp className="w-4 h-4" />
                             Importar
                           </button>
                           <button
@@ -1198,9 +1275,9 @@ export default function App() {
                               setPersonFormData({ name: '', phone: '', isCaptain: false, eventId: selectedEventId || '' });
                               setShowPersonForm(true);
                             }}
-                            className="flex items-center gap-1.5 px-3 py-1.5 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-all text-xs font-bold shadow-lg shadow-indigo-100"
+                            className="flex items-center justify-center gap-2 px-4 py-2.5 bg-indigo-600 text-white rounded-xl hover:bg-indigo-700 transition-all text-xs font-bold shadow-lg shadow-indigo-100 w-full sm:w-auto active:scale-95"
                           >
-                            <Plus className="w-3.5 h-3.5" />
+                            <Plus className="w-4 h-4" />
                             Novo Passageiro
                           </button>
                         </div>
@@ -1244,17 +1321,21 @@ export default function App() {
                               <div className="flex gap-1 md:gap-2 md:opacity-0 md:group-hover:opacity-100 transition-opacity">
                                 <button
                                   onClick={() => startEditPerson(person)}
-                                  className="p-1.5 text-zinc-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-all"
-                                  title="Editar pessoa"
+                                  className="p-2 text-zinc-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-all active:scale-90"
+                                  title="Editar Passageiro"
                                 >
-                                  <Edit2 className="w-4 h-4 md:w-5 h-5" />
+                                  <Edit2 className="w-4 h-4" />
                                 </button>
                                 <button
-                                  onClick={() => deletePerson(person.id)}
-                                  className="p-1.5 text-zinc-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-all"
-                                  title="Remover pessoa"
+                                  onClick={() => {
+                                    if (window.confirm('Tem certeza que deseja excluir este passageiro?')) {
+                                      deletePerson(person.id);
+                                    }
+                                  }}
+                                  className="p-2 text-zinc-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-all active:scale-90"
+                                  title="Excluir Passageiro"
                                 >
-                                  <Trash2 className="w-4 h-4 md:w-5 h-5" />
+                                  <Trash2 className="w-4 h-4" />
                                 </button>
                               </div>
                             </motion.div>
@@ -1544,17 +1625,21 @@ export default function App() {
                                       <div className="flex gap-1 md:opacity-0 md:group-hover:opacity-100 transition-opacity">
                                         <button
                                           onClick={() => startEditPayment(payment)}
-                                          className="p-1.5 text-zinc-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-all"
-                                          title="Editar pagamento"
+                                          className="p-1.5 text-zinc-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-all active:scale-90"
+                                          title="Editar Pagamento"
                                         >
-                                          <Edit2 className="w-4 h-4" />
+                                          <Edit2 className="w-3.5 h-3.5" />
                                         </button>
                                         <button
-                                          onClick={() => deletePayment(payment.id)}
-                                          className="p-1.5 text-zinc-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-all"
-                                          title="Excluir pagamento"
+                                          onClick={() => {
+                                            if (window.confirm('Tem certeza que deseja excluir este pagamento?')) {
+                                              deletePayment(payment.id);
+                                            }
+                                          }}
+                                          className="p-1.5 text-zinc-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-all active:scale-90"
+                                          title="Excluir Pagamento"
                                         >
-                                          <Trash2 className="w-4 h-4" />
+                                          <Trash2 className="w-3.5 h-3.5" />
                                         </button>
                                       </div>
                                     </div>
@@ -1574,13 +1659,13 @@ export default function App() {
                           <h2 className="text-xl font-bold text-zinc-900">Lista Ordenada</h2>
                           <p className="text-zinc-500 text-sm">Arraste para reordenar a lista de embarque</p>
                         </div>
-                        <div className="flex flex-wrap gap-2">
+                        <div className="flex flex-col sm:flex-row gap-2">
                           <button
                             onClick={sendPDFToCaptain}
                             disabled={!people.some(p => p.isCaptain)}
-                            className={`flex items-center gap-2 px-4 py-2 rounded-xl transition-all shadow-lg font-bold text-sm ${
+                            className={`flex items-center justify-center gap-2 px-4 py-3 rounded-xl transition-all shadow-lg font-bold text-sm w-full sm:w-auto ${
                               people.some(p => p.isCaptain)
-                              ? 'bg-emerald-600 text-white hover:bg-emerald-700 shadow-emerald-100'
+                              ? 'bg-emerald-600 text-white hover:bg-emerald-700 shadow-emerald-100 active:scale-95'
                               : 'bg-zinc-100 text-zinc-400 cursor-not-allowed'
                             }`}
                           >
@@ -1589,7 +1674,7 @@ export default function App() {
                           </button>
                           <button
                             onClick={generateOrderedPDF}
-                            className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-xl hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-100 font-bold text-sm"
+                            className="flex items-center justify-center gap-2 px-4 py-3 bg-indigo-600 text-white rounded-xl hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-100 font-bold text-sm w-full sm:w-auto active:scale-95"
                           >
                             <FileDown className="w-4 h-4" />
                             Gerar PDF
@@ -1637,121 +1722,6 @@ export default function App() {
         )
       )}
 
-      {activeTab === 'people' && (
-            <motion.div
-              key="people"
-              initial={{ opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -10 }}
-              className="space-y-8"
-            >
-              <div className="space-y-4">
-                <div className="flex items-center justify-between px-1">
-                  <div className="flex items-center gap-3">
-                    <h3 className="text-lg font-semibold text-zinc-900">Pessoas Confirmadas</h3>
-                    <div className="flex gap-2">
-                      <button
-                        onClick={() => {
-                          setImportEventId('');
-                          setShowImportModal(true);
-                        }}
-                        className="flex items-center gap-1.5 px-3 py-1.5 bg-zinc-100 text-zinc-600 rounded-lg hover:bg-zinc-200 transition-all text-xs font-bold"
-                      >
-                        <FileUp className="w-3.5 h-3.5" />
-                        Importar
-                      </button>
-                      <button
-                        onClick={() => {
-                          setEditingPersonId(null);
-                          setPersonFormData({ name: '', phone: '', isCaptain: false, eventId: selectedEventId || '' });
-                          setShowPersonForm(true);
-                        }}
-                        className="flex items-center gap-1.5 px-3 py-1.5 bg-indigo-50 text-indigo-600 rounded-lg hover:bg-indigo-100 transition-all text-xs font-bold"
-                      >
-                        <Plus className="w-3.5 h-3.5" />
-                        Novo Passageiro
-                      </button>
-                    </div>
-                  </div>
-                  <AnimatePresence>
-                    {showPersonSuccess && (
-                      <motion.div
-                        initial={{ opacity: 0, x: 20 }}
-                        animate={{ opacity: 1, x: 0 }}
-                        exit={{ opacity: 0, x: 20 }}
-                        className="px-3 py-1 bg-emerald-50 text-emerald-700 rounded-full flex items-center gap-2 text-xs font-medium"
-                      >
-                        <CheckCircle2 className="w-3 h-3" />
-                        {successMessage}
-                      </motion.div>
-                    )}
-                  </AnimatePresence>
-                </div>
-                {people.length === 0 ? (
-                  <div className="text-center py-12 bg-white rounded-2xl border border-dashed border-zinc-300">
-                    <Users className="w-10 h-10 text-zinc-300 mx-auto mb-3" />
-                    <p className="text-zinc-500 text-sm">Nenhuma pessoa cadastrada.</p>
-                  </div>
-                ) : (
-                  <div className="grid gap-4">
-                    {people.map((person) => (
-                      <motion.div
-                        layout
-                        key={person.id}
-                        initial={{ opacity: 0, scale: 0.95 }}
-                        animate={{ opacity: 1, scale: 1 }}
-                        className="bg-white p-2 md:p-5 rounded-2xl shadow-sm border border-zinc-200 flex items-center justify-between group"
-                      >
-                        <div className="flex gap-2 md:gap-4 items-center min-w-0">
-                          <div className="bg-indigo-50 p-1.5 md:p-3 rounded-xl text-indigo-600 shrink-0">
-                            <User className="w-4 h-4 md:w-6 h-6" />
-                          </div>
-                          <div className="min-w-0">
-                            <div className="flex items-center gap-2">
-                              <h3 className="font-bold text-zinc-900 text-sm md:text-lg truncate">{person.name}</h3>
-                              {person.isCaptain && (
-                                <span className="bg-indigo-100 text-indigo-700 text-[7px] md:text-[9px] font-black uppercase px-1 py-0.5 rounded-md flex items-center gap-1 shrink-0">
-                                  <Shield className="w-2 h-2 md:w-2.5 h-2.5" />
-                                  Capitão
-                                </span>
-                              )}
-                            </div>
-                            <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mt-1 text-[10px] md:text-sm text-zinc-500">
-                              <div className="flex items-center gap-1.5">
-                                <Phone className="w-3 h-3 md:w-3.5 h-3.5" />
-                                {person.phone}
-                              </div>
-                              <div className="flex items-center gap-1.5">
-                                <Calendar className="w-3 h-3 md:w-3.5 h-3.5" />
-                                {events.find(e => e.id === person.eventId)?.name || 'Sem evento'}
-                              </div>
-                            </div>
-                          </div>
-                        </div>
-                        <div className="flex gap-1 md:gap-2 md:opacity-0 md:group-hover:opacity-100 transition-opacity">
-                          <button
-                            onClick={() => startEditPerson(person)}
-                            className="p-1.5 text-zinc-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-all"
-                            title="Editar pessoa"
-                          >
-                            <Edit2 className="w-4 h-4 md:w-5 h-5" />
-                          </button>
-                          <button
-                            onClick={() => deletePerson(person.id)}
-                            className="p-1.5 text-zinc-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-all"
-                            title="Remover pessoa"
-                          >
-                            <Trash2 className="w-4 h-4 md:w-5 h-5" />
-                          </button>
-                        </div>
-                      </motion.div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            </motion.div>
-          )}
-
         </AnimatePresence>
 
         {/* Floating Action Button */}
@@ -1797,7 +1767,7 @@ export default function App() {
         )}
 
         {/* FAB for People */}
-        {(activeTab === 'people' || (activeTab === 'events' && selectedEventId && eventViewTab === 'people')) && (
+        {activeTab === 'events' && selectedEventId && eventViewTab === 'people' && (
           <>
             <motion.button
               initial={{ scale: 0, opacity: 0 }}
@@ -2113,6 +2083,17 @@ export default function App() {
                   >
                     Salvar Configurações
                   </button>
+
+                  {deferredPrompt && (
+                    <button
+                      type="button"
+                      onClick={handleInstallClick}
+                      className="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-4 rounded-2xl shadow-lg shadow-emerald-100 transition-all flex items-center justify-center gap-2 active:scale-[0.98]"
+                    >
+                      <FileDown className="w-5 h-5" />
+                      Instalar Aplicativo (PWA)
+                    </button>
+                  )}
                 </form>
               </motion.div>
             </div>

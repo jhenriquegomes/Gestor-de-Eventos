@@ -121,8 +121,8 @@ service cloud.firestore {
              hasOnlyAllowedFields(['id', 'eventId', 'name', 'phone', 'isCaptain', 'order', 'uid']) &&
              data.id is string &&
              data.eventId is string &&
-             data.name is string && data.name.size() > 0 && data.name.size() < 100 &&
-             data.phone is string && data.phone.size() > 0 && data.phone.size() < 20 &&
+             data.name is string && data.name.size() > 0 && data.name.size() < 200 &&
+             data.phone is string && data.phone.size() > 0 && data.phone.size() < 50 &&
              (data.get('isCaptain', false) is bool) &&
              (data.get('order', 0) is number) &&
              data.uid is string && data.uid == request.auth.uid;
