@@ -8,6 +8,10 @@ This contains everything you need to run your app locally.
 
 View your app in AI Studio: https://ai.studio/apps/3f235cef-7ba9-4bb6-918a-4179707ea759
 
+ou
+
+https://gestor-de-eventos-189557265625.us-west1.run.app
+
 ## Run Locally
 
 **Prerequisites:**  Node.js
