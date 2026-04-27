@@ -107,12 +107,23 @@ service cloud.firestore {
 
     function isValidTransport(data) {
       return hasRequiredFields(['id', 'eventId', 'type', 'capacity', 'pricePerPerson', 'uid']) &&
-             hasOnlyAllowedFields(['id', 'eventId', 'type', 'capacity', 'pricePerPerson', 'uid']) &&
+             hasOnlyAllowedFields(['id', 'eventId', 'name', 'type', 'capacity', 'pricePerPerson', 'uid']) &&
              data.id is string &&
              data.eventId is string &&
+             (!('name' in data) || (data.name is string && data.name.size() < 100)) &&
              data.type is string && data.type.size() > 0 && data.type.size() < 50 &&
              data.capacity is number && data.capacity > 0 &&
              data.pricePerPerson is number && data.pricePerPerson >= 0 &&
+             data.uid is string && data.uid == request.auth.uid;
+    }
+
+    function isValidSeatAssignment(data) {
+      return hasRequiredFields(['id', 'transportId', 'personId', 'seatNumber', 'uid']) &&
+             hasOnlyAllowedFields(['id', 'transportId', 'personId', 'seatNumber', 'uid']) &&
+             data.id is string &&
+             data.transportId is string &&
+             data.personId is string &&
+             data.seatNumber is number && data.seatNumber > 0 &&
              data.uid is string && data.uid == request.auth.uid;
     }
 
@@ -122,7 +133,7 @@ service cloud.firestore {
              data.id is string &&
              data.eventId is string &&
              data.name is string && data.name.size() > 0 && data.name.size() < 200 &&
-             data.phone is string && data.phone.size() > 0 && data.phone.size() < 50 &&
+             data.phone is string && data.phone.size() < 50 &&
              (data.get('isCaptain', false) is bool) &&
              (data.get('order', 0) is number) &&
              data.uid is string && data.uid == request.auth.uid;
@@ -174,6 +185,13 @@ service cloud.firestore {
       allow read: if isDocOwner();
       allow create: if isAuthenticated() && isValidPayment(request.resource.data);
       allow update: if isDocOwner() && isValidPayment(request.resource.data) && uidNotModified();
+      allow delete: if isDocOwner();
+    }
+
+    match /seatAssignments/{assignmentId} {
+      allow read: if isDocOwner();
+      allow create: if isAuthenticated() && isValidSeatAssignment(request.resource.data);
+      allow update: if isDocOwner() && isValidSeatAssignment(request.resource.data) && uidNotModified();
       allow delete: if isDocOwner();
     }
 

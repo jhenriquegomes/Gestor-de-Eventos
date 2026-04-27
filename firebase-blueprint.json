@@ -21,12 +21,26 @@
       "properties": {
         "id": { "type": "string" },
         "eventId": { "type": "string" },
+        "name": { "type": "string", "description": "The name of the vehicle (e.g., Bus 1)." },
         "type": { "type": "string" },
         "capacity": { "type": "number" },
         "pricePerPerson": { "type": "number" },
         "uid": { "type": "string", "description": "The UID of the user who owns this transport." }
       },
       "required": ["id", "eventId", "type", "capacity", "pricePerPerson", "uid"]
+    },
+    "SeatAssignment": {
+      "title": "SeatAssignment",
+      "description": "Assignment of a person to a seat in a transport.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "transportId": { "type": "string" },
+        "personId": { "type": "string" },
+        "seatNumber": { "type": "number" },
+        "uid": { "type": "string" }
+      },
+      "required": ["id", "transportId", "personId", "seatNumber", "uid"]
     },
     "Person": {
       "title": "Person",
@@ -83,6 +97,10 @@
     "/payments/{paymentId}": {
       "schema": "Payment",
       "description": "Collection of payments."
+    },
+    "/seatAssignments/{assignmentId}": {
+      "schema": "SeatAssignment",
+      "description": "Collection of seat assignments."
     },
     "/userSettings/{userId}": {
       "schema": "UserSettings",

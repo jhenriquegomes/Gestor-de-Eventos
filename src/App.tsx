@@ -3,8 +3,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { useState, FormEvent, useEffect } from 'react';
-import { Calendar, MapPin, Plus, List, Trash2, CheckCircle2, Bus, Users, DollarSign, User, Phone, CreditCard, Edit2, MessageCircle, Filter, Settings, X, ExternalLink, FileText, Shield, CheckSquare, LogOut, GripVertical, FileDown, FileUp } from 'lucide-react';
+import { useState, FormEvent, useEffect, ChangeEvent } from 'react';
+import { Calendar, MapPin, Plus, List, Trash2, CheckCircle2, Bus, Users, DollarSign, User, Phone, CreditCard, Edit2, MessageCircle, Filter, Settings, X, ExternalLink, FileText, Shield, CheckSquare, LogOut, GripVertical, FileDown, FileUp, AlertTriangle } from 'lucide-react';
 import { motion, AnimatePresence, Reorder } from 'motion/react';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
@@ -97,9 +97,18 @@ interface Event {
 interface Transport {
   id: string;
   eventId: string;
+  name?: string;
   type: string;
   capacity: number;
   pricePerPerson: number;
+  uid: string;
+}
+
+interface SeatAssignment {
+  id: string;
+  transportId: string;
+  personId: string;
+  seatNumber: number;
   uid: string;
 }
 
@@ -129,8 +138,25 @@ export default function App() {
   const [transports, setTransports] = useState<Transport[]>([]);
   const [people, setPeople] = useState<Person[]>([]);
   const [payments, setPayments] = useState<Payment[]>([]);
+  const [seatAssignments, setSeatAssignments] = useState<SeatAssignment[]>([]);
   const [selectedEventId, setSelectedEventId] = useState<string | null>(null);
+  const [selectedTransportId, setSelectedTransportId] = useState<string | null>(null);
+  const [showSeatMap, setShowSeatMap] = useState(false);
+  const [selectedSeatNumber, setSelectedSeatNumber] = useState<number | null>(null);
+  const [passengerSearch, setPassengerSearch] = useState('');
   const [eventViewTab, setEventViewTab] = useState<'transport' | 'payments' | 'people' | 'ordered-list'>('transport');
+
+  const [confirmModal, setConfirmModal] = useState<{
+    show: boolean;
+    title: string;
+    message: string;
+    onConfirm: () => void;
+  }>({
+    show: false,
+    title: '',
+    message: '',
+    onConfirm: () => {}
+  });
 
   const [formData, setFormData] = useState({
     name: '',
@@ -140,6 +166,7 @@ export default function App() {
   });
   const [transportFormData, setTransportFormData] = useState({
     eventId: '',
+    name: '',
     type: '',
     capacity: '',
     pricePerPerson: ''
@@ -240,6 +267,11 @@ export default function App() {
       setPayments(snapshot.docs.map(doc => doc.data() as Payment));
     }, (error) => handleFirestoreError(error, OperationType.LIST, 'payments'));
 
+    const qSeatAssignments = query(collection(db, 'seatAssignments'), where('uid', '==', user.uid));
+    const unsubSeatAssignments = onSnapshot(qSeatAssignments, (snapshot) => {
+      setSeatAssignments(snapshot.docs.map(doc => doc.data() as SeatAssignment));
+    }, (error) => handleFirestoreError(error, OperationType.LIST, 'seatAssignments'));
+
     const unsubSettings = onSnapshot(doc(db, 'userSettings', user.uid), (snapshot) => {
       if (snapshot.exists()) {
         const data = snapshot.data();
@@ -253,9 +285,193 @@ export default function App() {
       unsubTransports();
       unsubPeople();
       unsubPayments();
+      unsubSeatAssignments();
       unsubSettings();
     };
   }, [user, selectedEventId]);
+
+  const [isExporting, setIsExporting] = useState(false);
+  const [isImporting, setIsImporting] = useState(false);
+
+  const exportBackup = async () => {
+    if (!user) return;
+    setIsExporting(true);
+    try {
+      const backupData = {
+        version: '1.0',
+        timestamp: new Date().toISOString(),
+        userEmail: user.email,
+        data: {
+          events,
+          transports,
+          people,
+          payments,
+          seatAssignments,
+          settings: {
+            pixKey,
+            paymentMessage
+          }
+        }
+      };
+
+      const blob = new Blob([JSON.stringify(backupData, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const date = new Date().toISOString().split('T')[0];
+      const fileName = `backup_gestor_eventos_${date}.json`;
+
+      // Try to use Web Share API if available (better for mobile/email)
+      let shared = false;
+      if (navigator.share && navigator.canShare) {
+        try {
+          const file = new File([blob], fileName, { type: 'application/json' });
+          if (navigator.canShare({ files: [file] })) {
+            await navigator.share({
+              title: 'Backup Gestor de Eventos',
+              text: 'Arquivo de backup dos meus eventos e passageiros.',
+              files: [file]
+            });
+            shared = true;
+          }
+        } catch (shareError) {
+          console.warn('Share failed or was cancelled:', shareError);
+          // Don't throw, just let it fallback to download
+        }
+      }
+
+      if (!shared) {
+        // Fallback to traditional download
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = fileName;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+      }
+
+      setSuccessMessage('Backup exportado com sucesso!');
+      setShowSuccess(true);
+      setTimeout(() => setShowSuccess(false), 3000);
+    } catch (error: any) {
+      console.error('Export error:', error);
+      setSuccessMessage(`Erro ao exportar: ${error.message || 'Permissão negada ou erro desconhecido'}`);
+      setShowSuccess(true);
+      setTimeout(() => setShowSuccess(false), 5000);
+    } finally {
+      setIsExporting(false);
+    }
+  };
+
+  const importBackup = async (e: ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file || !user) return;
+
+    setIsImporting(true);
+    try {
+      const text = await file.text();
+      const backup = JSON.parse(text);
+
+      if (!backup.data || !backup.version) {
+        throw new Error('Formato de backup inválido.');
+      }
+
+      const { events: bEvents, transports: bTransports, people: bPeople, payments: bPayments, seatAssignments: bSeatAssignments, settings: bSettings } = backup.data;
+
+      // Import Settings
+      if (bSettings) {
+        await setDoc(doc(db, 'userSettings', user.uid), {
+          pixKey: bSettings.pixKey || pixKey,
+          paymentMessage: bSettings.paymentMessage || paymentMessage
+        });
+      }
+
+      // Import Events
+      if (Array.isArray(bEvents)) {
+        for (const event of bEvents) {
+          const eventData = {
+            id: event.id,
+            name: event.name,
+            date: event.date,
+            days: Number(event.days),
+            location: event.location,
+            uid: user.uid
+          };
+          await setDoc(doc(db, 'events', event.id), eventData);
+        }
+      }
+
+      // Import Transports
+      if (Array.isArray(bTransports)) {
+        for (const transport of bTransports) {
+          const transportData = {
+            id: transport.id,
+            eventId: transport.eventId,
+            name: transport.name || '',
+            type: transport.type,
+            capacity: Number(transport.capacity),
+            pricePerPerson: Number(transport.pricePerPerson),
+            uid: user.uid
+          };
+          await setDoc(doc(db, 'transports', transport.id), transportData);
+        }
+      }
+
+      // Import People
+      if (Array.isArray(bPeople)) {
+        for (const person of bPeople) {
+          const personData = {
+            id: person.id,
+            eventId: person.eventId,
+            name: person.name,
+            phone: person.phone || '',
+            isCaptain: !!person.isCaptain,
+            order: typeof person.order === 'number' ? person.order : 0,
+            uid: user.uid
+          };
+          await setDoc(doc(db, 'people', person.id), personData);
+        }
+      }
+
+      // Import Payments
+      if (Array.isArray(bPayments)) {
+        for (const payment of bPayments) {
+          const paymentData = {
+            id: payment.id,
+            eventId: payment.eventId,
+            personId: payment.personId,
+            amountPaid: Number(payment.amountPaid),
+            uid: user.uid
+          };
+          await setDoc(doc(db, 'payments', payment.id), paymentData);
+        }
+      }
+
+      // Import Seat Assignments
+      if (Array.isArray(bSeatAssignments)) {
+        for (const sa of bSeatAssignments) {
+          const saData = {
+            id: sa.id,
+            transportId: sa.transportId,
+            personId: sa.personId,
+            seatNumber: Number(sa.seatNumber),
+            uid: user.uid
+          };
+          await setDoc(doc(db, 'seatAssignments', sa.id), saData);
+        }
+      }
+
+      setSuccessMessage('Backup importado com sucesso!');
+      setShowSuccess(true);
+      setTimeout(() => setShowSuccess(false), 3000);
+      setShowSettingsModal(false);
+    } catch (error) {
+      console.error('Import error:', error);
+      handleFirestoreError(error, OperationType.WRITE, 'backup/import');
+    } finally {
+      setIsImporting(false);
+      // Reset input
+      e.target.value = '';
+    }
+  };
 
   const saveSettings = async (e: FormEvent) => {
     e.preventDefault();
@@ -355,6 +571,51 @@ export default function App() {
       await Promise.all(promises);
     } catch (error) {
       handleFirestoreError(error, OperationType.WRITE, 'people/reorder');
+    }
+  };
+
+  const assignSeat = async (transportId: string, seatNumber: number, personId: string) => {
+    if (!user || !selectedEventId) return;
+    try {
+      // Check if seat is already taken in THIS transport
+      const existing = seatAssignments.find(sa => sa.transportId === transportId && sa.seatNumber === seatNumber);
+      if (existing && existing.personId === personId) return; // Already assigned correctly
+
+      // Remove any existing assignment for THIS PERSON in the current event
+      const existingForPerson = seatAssignments.find(sa => {
+        const t = transports.find(trans => trans.id === sa.transportId);
+        return sa.personId === personId && t?.eventId === selectedEventId;
+      });
+
+      if (existingForPerson) {
+        await deleteDoc(doc(db, 'seatAssignments', existingForPerson.id));
+      }
+
+      // If the seat was occupied by someone else, that person becomes unassigned
+      if (existing) {
+        await deleteDoc(doc(db, 'seatAssignments', existing.id));
+      }
+
+      const id = crypto.randomUUID();
+      const newAssignment: SeatAssignment = {
+        id,
+        transportId,
+        personId,
+        seatNumber,
+        uid: user.uid
+      };
+      await setDoc(doc(db, 'seatAssignments', id), newAssignment);
+    } catch (error) {
+      handleFirestoreError(error, OperationType.WRITE, 'seatAssignments/assign');
+    }
+  };
+
+  const unassignSeat = async (assignmentId: string) => {
+    if (!user) return;
+    try {
+      await deleteDoc(doc(db, 'seatAssignments', assignmentId));
+    } catch (error) {
+      handleFirestoreError(error, OperationType.DELETE, `seatAssignments/${assignmentId}`);
     }
   };
 
@@ -481,6 +742,7 @@ export default function App() {
       const transportData: Transport = {
         id,
         eventId: targetEventId,
+        name: transportFormData.name,
         type: transportFormData.type,
         capacity: Number(transportFormData.capacity),
         pricePerPerson: Number(transportFormData.pricePerPerson),
@@ -489,7 +751,7 @@ export default function App() {
       await setDoc(doc(db, 'transports', id), transportData);
       setSuccessMessage(editingTransportId ? 'Transporte atualizado com sucesso!' : 'Transporte adicionado com sucesso!');
       setEditingTransportId(null);
-      setTransportFormData({ eventId: '', type: '', capacity: '', pricePerPerson: '' });
+      setTransportFormData({ eventId: '', name: '', type: '', capacity: '', pricePerPerson: '' });
       setShowTransportForm(false);
       setShowTransportSuccess(true);
       setTimeout(() => setShowTransportSuccess(false), 3000);
@@ -588,6 +850,27 @@ export default function App() {
     }
   };
 
+  const handleQuickPayment = async (personId: string, amount: number) => {
+    if (!selectedEventId || !user || amount <= 0) return;
+
+    try {
+      const id = crypto.randomUUID();
+      const newPayment: Payment = {
+        id,
+        eventId: selectedEventId,
+        personId,
+        amountPaid: amount,
+        uid: user.uid
+      };
+      await setDoc(doc(db, 'payments', id), newPayment);
+      setSuccessMessage('Pagamento registrado com sucesso!');
+      setShowPaymentSuccess(true);
+      setTimeout(() => setShowPaymentSuccess(false), 3000);
+    } catch (error) {
+      handleFirestoreError(error, OperationType.WRITE, 'payments/quick');
+    }
+  };
+
   const handlePaymentSubmit = (e: FormEvent) => {
     e.preventDefault();
     // This is now handled by individual buttons, but we keep it for compatibility if needed
@@ -609,6 +892,7 @@ export default function App() {
   const startEditTransport = (transport: Transport) => {
     setTransportFormData({
       eventId: transport.eventId,
+      name: transport.name || '',
       type: transport.type,
       capacity: transport.capacity.toString(),
       pricePerPerson: transport.pricePerPerson.toString()
@@ -665,6 +949,15 @@ export default function App() {
         await deleteDoc(doc(db, 'payments', p.id));
       }
 
+      // Seat Assignments
+      const assignmentDocs = seatAssignments.filter(sa => {
+        const t = transports.find(trans => trans.id === sa.transportId);
+        return t?.eventId === id;
+      });
+      for (const sa of assignmentDocs) {
+        await deleteDoc(doc(db, 'seatAssignments', sa.id));
+      }
+
       if (selectedEventId === id) {
         setSelectedEventId(null);
       }
@@ -680,6 +973,13 @@ export default function App() {
   const deleteTransport = async (id: string) => {
     try {
       await deleteDoc(doc(db, 'transports', id));
+      
+      // Clean up seat assignments for this transport
+      const assignmentDocs = seatAssignments.filter(sa => sa.transportId === id);
+      for (const sa of assignmentDocs) {
+        await deleteDoc(doc(db, 'seatAssignments', sa.id));
+      }
+
       setSuccessMessage('Transporte excluído com sucesso!');
       setShowTransportSuccess(true);
       setTimeout(() => setShowTransportSuccess(false), 3000);
@@ -696,6 +996,12 @@ export default function App() {
       const personPayments = payments.filter(p => p.personId === id);
       for (const p of personPayments) {
         await deleteDoc(doc(db, 'payments', p.id));
+      }
+
+      // Clean up seat assignments for this person
+      const personAssignments = seatAssignments.filter(sa => sa.personId === id);
+      for (const sa of personAssignments) {
+        await deleteDoc(doc(db, 'seatAssignments', sa.id));
       }
       
       setSuccessMessage('Passageiro e pagamentos excluídos com sucesso!');
@@ -984,9 +1290,15 @@ export default function App() {
                             </button>
                             <button
                               onClick={() => {
-                                if (window.confirm('Tem certeza que deseja excluir este evento?')) {
-                                  deleteEvent(event.id);
-                                }
+                                setConfirmModal({
+                                  show: true,
+                                  title: 'Excluir Evento',
+                                  message: 'Tem certeza que deseja excluir este evento? Todos os dados relacionados (transportes, passageiros e pagamentos) também serão excluídos.',
+                                  onConfirm: () => {
+                                    deleteEvent(event.id);
+                                    setConfirmModal(prev => ({ ...prev, show: false }));
+                                  }
+                                });
                               }}
                               className="p-2 text-zinc-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-all active:scale-90"
                               title="Excluir Evento"
@@ -1130,7 +1442,7 @@ export default function App() {
                                 onClick={() => {
                                   setShowTransportForm(false);
                                   setEditingTransportId(null);
-                                  setTransportFormData({ eventId: '', type: '', capacity: '', pricePerPerson: '' });
+                                  setTransportFormData({ eventId: '', name: '', type: '', capacity: '', pricePerPerson: '' });
                                 }}
                                 className="absolute inset-0 bg-zinc-900/40 backdrop-blur-sm"
                               />
@@ -1149,7 +1461,7 @@ export default function App() {
                                     onClick={() => {
                                       setShowTransportForm(false);
                                       setEditingTransportId(null);
-                                      setTransportFormData({ eventId: '', type: '', capacity: '', pricePerPerson: '' });
+                                      setTransportFormData({ eventId: '', name: '', type: '', capacity: '', pricePerPerson: '' });
                                     }}
                                     className="p-2 hover:bg-zinc-100 rounded-full text-zinc-400 transition-colors"
                                   >
@@ -1159,6 +1471,17 @@ export default function App() {
                                 
                                 <form onSubmit={handleTransportSubmit} className="p-6 space-y-5">
                                   <input type="hidden" value={selectedEventId || ''} />
+                                  <div>
+                                    <label htmlFor="name" className="block text-sm font-medium text-zinc-700 mb-1">Nome do Veículo (Opcional)</label>
+                                    <input
+                                      type="text"
+                                      id="name"
+                                      value={transportFormData.name}
+                                      onChange={e => setTransportFormData(prev => ({ ...prev, name: e.target.value, eventId: selectedEventId! }))}
+                                      placeholder="Ex: Ônibus 1, Van Executiva"
+                                      className="w-full px-4 py-2.5 bg-zinc-50 border border-zinc-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
+                                    />
+                                  </div>
                                   <div>
                                     <label htmlFor="type" className="block text-sm font-medium text-zinc-700 mb-1">Tipo</label>
                                     <input
@@ -1227,11 +1550,25 @@ export default function App() {
                                 <Bus className="w-4 h-4 md:w-6 h-6" />
                               </div>
                               <div className="min-w-0">
-                                <h4 className="font-bold text-zinc-900 text-sm md:text-base truncate">{transport.type}</h4>
-                                <p className="text-[10px] md:text-sm text-zinc-500 truncate">{transport.capacity} pessoas • R$ {transport.pricePerPerson.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}/pessoa</p>
+                                <h4 className="font-bold text-zinc-900 text-sm md:text-base truncate">{transport.name || transport.type}</h4>
+                                <p className="text-[10px] md:text-sm text-zinc-500 truncate">
+                                  {transport.name ? transport.type + ' • ' : ''}
+                                  {transport.capacity} pessoas • R$ {transport.pricePerPerson.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}/pessoa
+                                </p>
                               </div>
                             </div>
-                            <div className="flex gap-1 md:gap-2">
+                            <div className="flex gap-1 md:gap-2 items-center">
+                              <button
+                                onClick={() => {
+                                  setSelectedTransportId(transport.id);
+                                  setShowSeatMap(true);
+                                }}
+                                className="flex items-center gap-1 p-2 md:px-3 md:py-1.5 bg-emerald-50 text-emerald-600 hover:bg-emerald-100 rounded-lg text-[10px] font-bold uppercase transition-all"
+                                title="Mapa de Assentos"
+                              >
+                                <CheckSquare className="w-3.5 h-3.5 md:w-3.5 h-3.5" />
+                                <span className="hidden md:inline">Mapa de Assentos</span>
+                              </button>
                               <button
                                 onClick={() => startEditTransport(transport)}
                                 className="p-2 text-zinc-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-all active:scale-90"
@@ -1241,9 +1578,15 @@ export default function App() {
                               </button>
                               <button
                                 onClick={() => {
-                                  if (window.confirm('Tem certeza que deseja excluir este transporte?')) {
-                                    deleteTransport(transport.id);
-                                  }
+                                  setConfirmModal({
+                                    show: true,
+                                    title: 'Excluir Transporte',
+                                    message: 'Tem certeza que deseja excluir este transporte?',
+                                    onConfirm: () => {
+                                      deleteTransport(transport.id);
+                                      setConfirmModal(prev => ({ ...prev, show: false }));
+                                    }
+                                  });
                                 }}
                                 className="p-2 text-zinc-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-all active:scale-90"
                                 title="Excluir Transporte"
@@ -1328,9 +1671,15 @@ export default function App() {
                                 </button>
                                 <button
                                   onClick={() => {
-                                    if (window.confirm('Tem certeza que deseja excluir este passageiro?')) {
-                                      deletePerson(person.id);
-                                    }
+                                    setConfirmModal({
+                                      show: true,
+                                      title: 'Excluir Passageiro',
+                                      message: 'Tem certeza que deseja excluir este passageiro? Todos os pagamentos deste passageiro também serão excluídos.',
+                                      onConfirm: () => {
+                                        deletePerson(person.id);
+                                        setConfirmModal(prev => ({ ...prev, show: false }));
+                                      }
+                                    });
                                   }}
                                   className="p-2 text-zinc-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-all active:scale-90"
                                   title="Excluir Passageiro"
@@ -1556,13 +1905,33 @@ export default function App() {
                                       {isFullyPaid ? 'Pago' : 'Pendente'}
                                     </span>
                                     {!isFullyPaid && (
-                                      <button
-                                        onClick={() => handleWhatsAppClick(person, price - totalPaid)}
-                                        className="flex items-center gap-1 px-2 py-1 md:px-3 md:py-1.5 bg-emerald-500 hover:bg-emerald-600 text-white rounded-lg text-[9px] md:text-[10px] font-bold uppercase tracking-wider transition-all active:scale-95 shadow-sm shadow-emerald-100"
-                                      >
-                                        <MessageCircle className="w-3 h-3 md:w-3.5 h-3.5" />
-                                        Cobrar
-                                      </button>
+                                      <div className="flex gap-2">
+                                        <button
+                                          onClick={() => {
+                                            setConfirmModal({
+                                              show: true,
+                                              title: 'Confirmar Pagamento',
+                                              message: `Deseja registrar o pagamento total de R$ ${(price - totalPaid).toLocaleString('pt-BR', { minimumFractionDigits: 2 })} para ${person.name}?`,
+                                              onConfirm: () => {
+                                                handleQuickPayment(person.id, price - totalPaid);
+                                                setConfirmModal(prev => ({ ...prev, show: false }));
+                                              }
+                                            });
+                                          }}
+                                          className="flex items-center gap-1 px-2 py-1 md:px-3 md:py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-[9px] md:text-[10px] font-bold uppercase tracking-wider transition-all active:scale-95 shadow-sm shadow-indigo-100"
+                                          title="Informar pagamento total"
+                                        >
+                                          <DollarSign className="w-3 h-3 md:w-3.5 h-3.5" />
+                                          Pagar
+                                        </button>
+                                        <button
+                                          onClick={() => handleWhatsAppClick(person, price - totalPaid)}
+                                          className="flex items-center gap-1 px-2 py-1 md:px-3 md:py-1.5 bg-emerald-500 hover:bg-emerald-600 text-white rounded-lg text-[9px] md:text-[10px] font-bold uppercase tracking-wider transition-all active:scale-95 shadow-sm shadow-emerald-100"
+                                        >
+                                          <MessageCircle className="w-3 h-3 md:w-3.5 h-3.5" />
+                                          Cobrar
+                                        </button>
+                                      </div>
                                     )}
                                   </div>
                                 </div>
@@ -1632,9 +2001,15 @@ export default function App() {
                                         </button>
                                         <button
                                           onClick={() => {
-                                            if (window.confirm('Tem certeza que deseja excluir este pagamento?')) {
-                                              deletePayment(payment.id);
-                                            }
+                                            setConfirmModal({
+                                              show: true,
+                                              title: 'Excluir Pagamento',
+                                              message: 'Tem certeza que deseja excluir este pagamento?',
+                                              onConfirm: () => {
+                                                deletePayment(payment.id);
+                                                setConfirmModal(prev => ({ ...prev, show: false }));
+                                              }
+                                            });
                                           }}
                                           className="p-1.5 text-zinc-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-all active:scale-90"
                                           title="Excluir Pagamento"
@@ -2004,6 +2379,219 @@ export default function App() {
           )}
         </AnimatePresence>
 
+        {/* Seat Map Modal */}
+        <AnimatePresence>
+          {showSeatMap && selectedTransportId && (
+            <div className="fixed inset-0 z-[110] flex items-center justify-center p-2 md:p-4">
+              <motion.div
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                onClick={() => {
+                  setShowSeatMap(false);
+                  setSelectedSeatNumber(null);
+                }}
+                className="absolute inset-0 bg-zinc-900/40 backdrop-blur-sm"
+              />
+              <motion.div
+                initial={{ opacity: 0, scale: 0.95, y: 20 }}
+                animate={{ opacity: 1, scale: 1, y: 0 }}
+                exit={{ opacity: 0, scale: 0.95, y: 20 }}
+                className="relative w-full max-w-5xl h-[90vh] md:h-[80vh] bg-white rounded-3xl shadow-2xl border border-zinc-200 overflow-hidden flex flex-col"
+              >
+                {/* Header */}
+                <div className="p-4 md:p-6 border-b border-zinc-100 flex items-center justify-between bg-zinc-50/50 shrink-0">
+                  <div className="flex items-center gap-3">
+                    <div className="bg-emerald-100 p-2 rounded-xl text-emerald-600">
+                      <Bus className="w-5 h-5" />
+                    </div>
+                    <div>
+                      <h3 className="text-lg font-bold text-zinc-900">
+                        {transports.find(t => t.id === selectedTransportId)?.name || transports.find(t => t.id === selectedTransportId)?.type}
+                      </h3>
+                      <p className="text-xs text-zinc-500">Mapa de Assentos - {seatAssignments.filter(sa => sa.transportId === selectedTransportId).length} / {transports.find(t => t.id === selectedTransportId)?.capacity} ocupados</p>
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => {
+                      setShowSeatMap(false);
+                      setSelectedSeatNumber(null);
+                    }}
+                    className="p-2 hover:bg-zinc-100 rounded-full text-zinc-400 transition-colors"
+                  >
+                    <X className="w-5 h-5" />
+                  </button>
+                </div>
+
+                <div className="flex-1 flex flex-col md:flex-row overflow-hidden">
+                  {/* Left: Seat Map */}
+                  <div className="flex-1 overflow-y-auto p-4 md:p-8 bg-zinc-50/30">
+                    <div className="max-w-md mx-auto bg-white p-6 md:p-10 rounded-[3rem] shadow-sm border border-zinc-100 border-t-[12px] border-t-zinc-200 relative mb-10">
+                      {/* Driver Area */}
+                      <div className="absolute top-0 left-1/2 -translate-x-1/2 -translate-y-full mb-4 flex items-center justify-center p-4 bg-zinc-200 w-24 h-12 rounded-t-3xl">
+                        <div className="w-8 h-8 rounded-full border-2 border-zinc-400 flex items-center justify-center">
+                          <div className="w-4 h-1 bg-zinc-400 rounded-full" />
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-5 gap-3">
+                        {Array.from({ length: Math.ceil((transports.find(t => t.id === selectedTransportId)?.capacity || 0) / 4) }).map((_, rowIndex) => (
+                           <div key={rowIndex} className="col-span-5 grid grid-cols-5 gap-3 mb-2">
+                             {[0, 1, 3, 4].map(colIndex => {
+                               const seatIndex = rowIndex * 4 + (colIndex > 2 ? colIndex - 1 : colIndex);
+                               const seatNum = seatIndex + 1;
+                               if (seatNum > (transports.find(t => t.id === selectedTransportId)?.capacity || 0)) {
+                                 return <div key={colIndex} className="aspect-square" />;
+                               }
+
+                               const assignment = seatAssignments.find(sa => sa.transportId === selectedTransportId && sa.seatNumber === seatNum);
+                               const person = assignment ? people.find(p => p.id === assignment.personId) : null;
+                               const isSelected = selectedSeatNumber === seatNum;
+                               
+                               return (
+                                 <button
+                                   key={colIndex}
+                                   onClick={() => setSelectedSeatNumber(isSelected ? null : seatNum)}
+                                   className={`aspect-square rounded-xl border-2 flex flex-col items-center justify-center p-1 transition-all relative group ${
+                                     person 
+                                       ? 'bg-emerald-50 border-emerald-500 text-emerald-700 shadow-sm shadow-emerald-100' 
+                                       : isSelected 
+                                         ? 'bg-indigo-50 border-indigo-500 text-indigo-700 shadow-md ring-4 ring-indigo-500/10'
+                                         : 'bg-white border-zinc-100 text-zinc-400 hover:border-zinc-300'
+                                   }`}
+                                 >
+                                   <span className={`text-[10px] font-black ${isSelected ? 'scale-110' : ''} transition-transform`}>{seatNum}</span>
+                                   {person && <User className="w-3.5 h-3.5 mt-1" />}
+                                   
+                                   {/* Tooltip for desktop */}
+                                   {person && (
+                                     <div className="absolute -top-12 left-1/2 -translate-x-1/2 bg-zinc-900 text-white text-[10px] py-1.5 px-3 rounded-lg whitespace-nowrap opacity-0 group-hover:opacity-100 pointer-events-none z-20 transition-all shadow-xl">
+                                       {person.name}
+                                       <div className="absolute top-full left-1/2 -translate-x-1/2 border-8 border-transparent border-t-zinc-900" />
+                                     </div>
+                                   )}
+                                 </button>
+                               );
+                             })}
+                             {/* Aisle */}
+                             <div className="col-start-3" />
+                           </div>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Right: Assignment Panel */}
+                  <div className="w-full md:w-80 border-t md:border-t-0 md:border-l border-zinc-100 flex flex-col bg-white shrink-0 overflow-hidden">
+                    <div className="p-4 border-b border-zinc-100 bg-zinc-50/30">
+                      <h4 className="text-sm font-bold text-zinc-900 mb-3 flex items-center gap-2">
+                        {selectedSeatNumber ? (
+                          <>
+                            <span className="w-2 h-6 bg-indigo-500 rounded-full" />
+                            Assento {selectedSeatNumber}
+                          </>
+                        ) : 'Selecione um lugar'}
+                      </h4>
+                      
+                      {selectedSeatNumber ? (
+                        <>
+                          {seatAssignments.find(sa => sa.transportId === selectedTransportId && sa.seatNumber === selectedSeatNumber) ? (
+                            <div className="p-4 bg-emerald-50 rounded-2xl border border-emerald-100 mb-3 overflow-hidden transition-all">
+                              <p className="text-[10px] uppercase font-black text-emerald-600 mb-1 tracking-widest">Ocupado por:</p>
+                              <div className="flex items-center gap-2 mb-4">
+                                <div className="bg-emerald-200 p-1.5 rounded-lg">
+                                  <User className="w-4 h-4 text-emerald-700" />
+                                </div>
+                                <p className="text-sm font-bold text-emerald-900 truncate">
+                                  {people.find(p => p.id === seatAssignments.find(sa => sa.transportId === selectedTransportId && sa.seatNumber === selectedSeatNumber)?.personId)?.name}
+                                </p>
+                              </div>
+                              <button
+                                onClick={() => {
+                                  const assignment = seatAssignments.find(sa => sa.transportId === selectedTransportId && sa.seatNumber === selectedSeatNumber);
+                                  if (assignment) unassignSeat(assignment.id);
+                                }}
+                                className="w-full py-2.5 bg-white text-red-600 border border-red-100 rounded-xl text-[10px] font-bold uppercase hover:bg-red-50 transition-colors flex items-center justify-center gap-2"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                                Remover da Cadeira
+                              </button>
+                            </div>
+                          ) : (
+                            <div className="relative mb-3">
+                              <List className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-400" />
+                              <input
+                                type="text"
+                                placeholder="Buscar passageiro..."
+                                value={passengerSearch}
+                                onChange={e => setPassengerSearch(e.target.value)}
+                                className="w-full pl-10 pr-4 py-2.5 bg-white border border-zinc-200 rounded-xl text-sm focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
+                              />
+                            </div>
+                          )}
+                        </>
+                      ) : (
+                        <div className="bg-indigo-50 p-4 rounded-2xl border border-indigo-100">
+                          <p className="text-xs text-indigo-700 leading-relaxed font-medium">
+                            Selecione uma cadeira vazia no mapa do veículo para atribuir um passageiro a ela.
+                          </p>
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="flex-1 overflow-y-auto p-4">
+                      {selectedSeatNumber && !seatAssignments.find(sa => sa.transportId === selectedTransportId && sa.seatNumber === selectedSeatNumber) && (
+                        <div className="space-y-2 pb-10">
+                          <p className="text-[10px] font-black text-zinc-400 uppercase tracking-widest pl-1 mb-3">Passageiros Disponíveis</p>
+                          {people
+                            .filter(person => {
+                              const searchMatch = person.name.toLowerCase().includes(passengerSearch.toLowerCase());
+                              const isAssignedInThisEvent = seatAssignments.some(sa => {
+                                const t = transports.find(trans => trans.id === sa.transportId);
+                                return sa.personId === person.id && t?.eventId === selectedEventId;
+                              });
+                              return searchMatch && !isAssignedInThisEvent;
+                            })
+                            .map(person => {
+                               const totalPaid = getTotalPaidByPersonForEvent(person.id, selectedEventId!);
+                               const transport = transports.find(t => t.eventId === selectedEventId);
+                               const price = (transport?.pricePerPerson || 0) * (events.find(e => e.id === selectedEventId)?.days || 0);
+                               const isPaid = price > 0 && totalPaid >= price;
+
+                               return (
+                                <button
+                                  key={person.id}
+                                  onClick={() => {
+                                    assignSeat(selectedTransportId, selectedSeatNumber, person.id);
+                                    setSelectedSeatNumber(null);
+                                    setPassengerSearch('');
+                                  }}
+                                  className="w-full text-left p-3.5 rounded-2xl border border-zinc-100 hover:border-indigo-200 hover:bg-indigo-50/50 transition-all flex items-center justify-between group bg-zinc-50/30"
+                                >
+                                  <div className="min-w-0 pr-2">
+                                    <p className="font-bold text-zinc-900 text-sm truncate">{person.name}</p>
+                                    <div className="flex items-center gap-2 mt-1">
+                                      <span className={`text-[8px] font-black py-0.5 px-2 rounded-md ${isPaid ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'}`}>
+                                        {isPaid ? 'PAGO' : 'PENDENTE'}
+                                      </span>
+                                    </div>
+                                  </div>
+                                  <div className="bg-white p-1.5 rounded-xl border border-zinc-100 text-zinc-400 group-hover:text-indigo-600 transition-colors shadow-sm">
+                                    <Plus className="w-4 h-4" />
+                                  </div>
+                                </button>
+                               );
+                            })}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              </motion.div>
+            </div>
+          )}
+        </AnimatePresence>
+
         {/* Settings Modal */}
         <AnimatePresence>
           {showSettingsModal && (
@@ -2077,6 +2665,43 @@ export default function App() {
                     </div>
                   </div>
 
+                  <div className="pt-4 border-t border-zinc-100 space-y-4">
+                    <label className="block text-xs font-bold text-zinc-400 uppercase tracking-widest mb-2">
+                      Backup e Restauração
+                    </label>
+                    <div className="grid grid-cols-2 gap-3">
+                      <button
+                        type="button"
+                        onClick={exportBackup}
+                        disabled={isExporting}
+                        className="flex items-center justify-center gap-2 px-4 py-3 bg-zinc-100 text-zinc-700 rounded-2xl hover:bg-zinc-200 transition-all text-xs font-bold active:scale-95 disabled:opacity-50"
+                      >
+                        <FileDown className="w-4 h-4" />
+                        {isExporting ? 'Exportando...' : 'Exportar Backup'}
+                      </button>
+                      <div className="relative">
+                        <input
+                          type="file"
+                          accept=".json"
+                          onChange={importBackup}
+                          className="absolute inset-0 opacity-0 cursor-pointer disabled:cursor-not-allowed"
+                          disabled={isImporting}
+                        />
+                        <button
+                          type="button"
+                          disabled={isImporting}
+                          className="w-full flex items-center justify-center gap-2 px-4 py-3 bg-zinc-100 text-zinc-700 rounded-2xl hover:bg-zinc-200 transition-all text-xs font-bold active:scale-95 disabled:opacity-50"
+                        >
+                          <FileUp className="w-4 h-4" />
+                          {isImporting ? 'Importando...' : 'Importar Backup'}
+                        </button>
+                      </div>
+                    </div>
+                    <p className="text-[10px] text-zinc-400 leading-relaxed text-center">
+                      O backup inclui todos os eventos, passageiros, transportes e pagamentos.
+                    </p>
+                  </div>
+
                   <button
                     type="submit"
                     className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-4 rounded-2xl shadow-lg shadow-indigo-200 transition-all flex items-center justify-center gap-2 active:scale-[0.98]"
@@ -2095,6 +2720,49 @@ export default function App() {
                     </button>
                   )}
                 </form>
+              </motion.div>
+            </div>
+          )}
+        </AnimatePresence>
+        {/* Confirmation Modal */}
+        <AnimatePresence>
+          {confirmModal.show && (
+            <div className="fixed inset-0 z-[200] flex items-center justify-center p-4">
+              <motion.div
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                onClick={() => setConfirmModal(prev => ({ ...prev, show: false }))}
+                className="absolute inset-0 bg-zinc-900/40 backdrop-blur-sm"
+              />
+              <motion.div
+                initial={{ opacity: 0, scale: 0.95, y: 20 }}
+                animate={{ opacity: 1, scale: 1, y: 0 }}
+                exit={{ opacity: 0, scale: 0.95, y: 20 }}
+                className="relative w-full max-w-sm bg-white rounded-3xl shadow-2xl border border-zinc-200 overflow-hidden"
+              >
+                <div className="p-6 text-center">
+                  <div className="mx-auto w-12 h-12 bg-red-100 text-red-600 rounded-full flex items-center justify-center mb-4">
+                    <AlertTriangle className="w-6 h-6" />
+                  </div>
+                  <h3 className="text-lg font-bold text-zinc-900 mb-2">{confirmModal.title}</h3>
+                  <p className="text-sm text-zinc-500 mb-6">{confirmModal.message}</p>
+                  
+                  <div className="grid grid-cols-2 gap-3">
+                    <button
+                      onClick={() => setConfirmModal(prev => ({ ...prev, show: false }))}
+                      className="px-4 py-3 bg-zinc-100 hover:bg-zinc-200 text-zinc-700 font-bold rounded-2xl transition-all active:scale-95"
+                    >
+                      Cancelar
+                    </button>
+                    <button
+                      onClick={confirmModal.onConfirm}
+                      className="px-4 py-3 bg-red-600 hover:bg-red-700 text-white font-bold rounded-2xl shadow-lg shadow-red-100 transition-all active:scale-95"
+                    >
+                      Excluir
+                    </button>
+                  </div>
+                </div>
               </motion.div>
             </div>
           )}
