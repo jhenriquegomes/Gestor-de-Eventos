@@ -151,11 +151,15 @@ export default function App() {
     title: string;
     message: string;
     onConfirm: () => void;
+    confirmText?: string;
+    variant?: 'danger' | 'success' | 'indigo';
   }>({
     show: false,
     title: '',
     message: '',
-    onConfirm: () => {}
+    onConfirm: () => {},
+    confirmText: 'Excluir',
+    variant: 'danger'
   });
 
   const [formData, setFormData] = useState({
@@ -1350,6 +1354,8 @@ export default function App() {
                                   show: true,
                                   title: 'Excluir Evento',
                                   message: 'Tem certeza que deseja excluir este evento? Todos os dados relacionados (transportes, passageiros e pagamentos) também serão excluídos.',
+                                  confirmText: 'Excluir',
+                                  variant: 'danger',
                                   onConfirm: () => {
                                     deleteEvent(event.id);
                                     setConfirmModal(prev => ({ ...prev, show: false }));
@@ -1635,6 +1641,8 @@ export default function App() {
                                     show: true,
                                     title: 'Excluir Transporte',
                                     message: 'Tem certeza que deseja excluir este transporte?',
+                                    confirmText: 'Excluir',
+                                    variant: 'danger',
                                     onConfirm: () => {
                                       deleteTransport(transport.id);
                                       setConfirmModal(prev => ({ ...prev, show: false }));
@@ -1728,6 +1736,8 @@ export default function App() {
                                       show: true,
                                       title: 'Excluir Passageiro',
                                       message: 'Tem certeza que deseja excluir este passageiro? Todos os pagamentos deste passageiro também serão excluídos.',
+                                      confirmText: 'Excluir',
+                                      variant: 'danger',
                                       onConfirm: () => {
                                         deletePerson(person.id);
                                         setConfirmModal(prev => ({ ...prev, show: false }));
@@ -1965,6 +1975,8 @@ export default function App() {
                                               show: true,
                                               title: 'Confirmar Pagamento',
                                               message: `Deseja registrar o pagamento total de R$ ${(price - totalPaid).toLocaleString('pt-BR', { minimumFractionDigits: 2 })} para ${person.name}?`,
+                                              confirmText: 'Pago',
+                                              variant: 'success',
                                               onConfirm: () => {
                                                 handleQuickPayment(person.id, price - totalPaid);
                                                 setConfirmModal(prev => ({ ...prev, show: false }));
@@ -2058,6 +2070,8 @@ export default function App() {
                                               show: true,
                                               title: 'Excluir Pagamento',
                                               message: 'Tem certeza que deseja excluir este pagamento?',
+                                              confirmText: 'Excluir',
+                                              variant: 'danger',
                                               onConfirm: () => {
                                                 deletePayment(payment.id);
                                                 setConfirmModal(prev => ({ ...prev, show: false }));
@@ -2743,8 +2757,12 @@ export default function App() {
                 className="relative w-full max-w-sm bg-white rounded-3xl shadow-2xl border border-zinc-200 overflow-hidden"
               >
                 <div className="p-6 text-center">
-                  <div className="mx-auto w-12 h-12 bg-red-100 text-red-600 rounded-full flex items-center justify-center mb-4">
-                    <AlertTriangle className="w-6 h-6" />
+                  <div className={`mx-auto w-12 h-12 rounded-full flex items-center justify-center mb-4 ${
+                    confirmModal.variant === 'success' ? 'bg-emerald-100 text-emerald-600' : 
+                    confirmModal.variant === 'indigo' ? 'bg-indigo-100 text-indigo-600' : 
+                    'bg-red-100 text-red-600'
+                  }`}>
+                    {confirmModal.variant === 'success' ? <CheckCircle2 className="w-6 h-6" /> : <AlertTriangle className="w-6 h-6" />}
                   </div>
                   <h3 className="text-lg font-bold text-zinc-900 mb-2">{confirmModal.title}</h3>
                   <p className="text-sm text-zinc-500 mb-6">{confirmModal.message}</p>
@@ -2758,9 +2776,13 @@ export default function App() {
                     </button>
                     <button
                       onClick={confirmModal.onConfirm}
-                      className="px-4 py-3 bg-red-600 hover:bg-red-700 text-white font-bold rounded-2xl shadow-lg shadow-red-100 transition-all active:scale-95"
+                      className={`px-4 py-3 text-white font-bold rounded-2xl shadow-lg transition-all active:scale-95 ${
+                        confirmModal.variant === 'success' ? 'bg-emerald-600 hover:bg-emerald-700 shadow-emerald-100' :
+                        confirmModal.variant === 'indigo' ? 'bg-indigo-600 hover:bg-indigo-700 shadow-indigo-100' :
+                        'bg-red-600 hover:bg-red-700 shadow-red-100'
+                      }`}
                     >
-                      Excluir
+                      {confirmModal.confirmText || 'Confirmar'}
                     </button>
                   </div>
                 </div>
