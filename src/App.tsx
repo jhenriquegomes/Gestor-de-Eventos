@@ -4,8 +4,8 @@
  */
 
 import { useState, FormEvent, useEffect, ChangeEvent } from 'react';
-import { Calendar, MapPin, Plus, List, Trash2, CheckCircle2, Bus, Users, DollarSign, User, Phone, CreditCard, Edit2, MessageCircle, Filter, Settings, X, ExternalLink, FileText, Shield, CheckSquare, LogOut, GripVertical, FileDown, FileUp, AlertTriangle } from 'lucide-react';
-import { motion, AnimatePresence, Reorder } from 'motion/react';
+import { Calendar, MapPin, Plus, List, Trash2, CheckCircle2, Bus, Users, DollarSign, User, Phone, CreditCard, Edit2, MessageCircle, Filter, Settings, X, ExternalLink, FileText, Shield, CheckSquare, LogOut, FileDown, FileUp, AlertTriangle, Search, Info } from 'lucide-react';
+import { motion, AnimatePresence } from 'motion/react';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import { auth, db, googleProvider, signInWithPopup, signOut } from './firebase';
@@ -144,7 +144,7 @@ export default function App() {
   const [showSeatMap, setShowSeatMap] = useState(false);
   const [selectedSeatNumber, setSelectedSeatNumber] = useState<number | null>(null);
   const [passengerSearch, setPassengerSearch] = useState('');
-  const [eventViewTab, setEventViewTab] = useState<'transport' | 'payments' | 'people' | 'ordered-list'>('transport');
+  const [eventViewTab, setEventViewTab] = useState<'transport' | 'payments' | 'people'>('transport');
 
   const [confirmModal, setConfirmModal] = useState<{
     show: boolean;
@@ -225,6 +225,15 @@ export default function App() {
       setDeferredPrompt(null);
     }
   };
+
+  const [isMobile, setIsMobile] = useState(false);
+
+  useEffect(() => {
+    const checkMobile = () => setIsMobile(window.innerWidth < 768);
+    checkMobile();
+    window.addEventListener('resize', checkMobile);
+    return () => window.removeEventListener('resize', checkMobile);
+  }, []);
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
@@ -521,59 +530,6 @@ export default function App() {
     window.open(`https://wa.me/${finalPhone}?text=${encodedMessage}`, '_blank');
   };
 
-  const generateOrderedPDF = () => {
-    const event = events.find(e => e.id === selectedEventId);
-    if (!event) return;
-
-    const doc = new jsPDF();
-    const title = `Lista de Embarque: ${event.name}`;
-    const dateStr = `Data: ${new Date(event.date + 'T00:00:00').toLocaleDateString('pt-BR')}`;
-    const daysStr = `Duração: ${event.days} dia(s)`;
-
-    doc.setFontSize(18);
-    doc.text(title, 14, 22);
-    doc.setFontSize(11);
-    doc.text(dateStr, 14, 30);
-    doc.text(daysStr, 14, 36);
-
-    const headers = [['#', 'Nome', ...Array.from({ length: event.days }, (_, i) => [`Dia ${i + 1} (Ida)`, `Dia ${i + 1} (Volta)`]).flat()]];
-    const data = people.map((p, index) => [
-      (index + 1).toString(),
-      p.name,
-      ...Array.from({ length: event.days * 2 }, () => '[ ]')
-    ]);
-
-    autoTable(doc, {
-      head: headers,
-      body: data,
-      startY: 45,
-      theme: 'grid',
-      headStyles: { fillColor: [79, 70, 229] },
-      styles: { fontSize: event.days > 2 ? 7 : 9, cellPadding: 2 },
-    });
-
-    doc.save(`lista_ordenada_${event.name.toLowerCase().replace(/\s+/g, '_')}.pdf`);
-  };
-
-  const updatePeopleOrder = async (newOrder: Person[]) => {
-    if (!user) return;
-    try {
-      // Update local state immediately for smooth UI
-      setPeople(newOrder.map((p, index) => ({ ...p, order: index })));
-      
-      // Update Firestore
-      const promises = newOrder.map((person, index) => {
-        return setDoc(doc(db, 'people', person.id), {
-          ...person,
-          order: index
-        });
-      });
-      await Promise.all(promises);
-    } catch (error) {
-      handleFirestoreError(error, OperationType.WRITE, 'people/reorder');
-    }
-  };
-
   const assignSeat = async (transportId: string, seatNumber: number, personId: string) => {
     if (!user || !selectedEventId) return;
     try {
@@ -652,6 +608,106 @@ export default function App() {
     const fileName = `checkin_${event.name.toLowerCase().replace(/\s+/g, '_')}.pdf`;
     doc.save(fileName);
     return fileName;
+  };
+
+  const generateTransportPDF = (transportId: string) => {
+    const transport = transports.find(t => t.id === transportId);
+    const event = events.find(e => e.id === selectedEventId);
+    if (!transport || !event) return;
+
+    const doc = new jsPDF();
+    const transportName = transport.name || transport.type;
+    
+    // Header
+    doc.setFillColor(240, 244, 255);
+    doc.rect(0, 0, 210, 40, 'F');
+    
+    doc.setFontSize(22);
+    doc.setTextColor(30, 41, 59);
+    doc.setFont('helvetica', 'bold');
+    doc.text('MAPA DE PASSAGEIROS', 105, 18, { align: 'center' });
+    
+    doc.setFontSize(14);
+    doc.setTextColor(71, 85, 105);
+    doc.text(`${transportName.toUpperCase()} - ${transport.capacity} LUGARES`, 105, 28, { align: 'center' });
+
+    doc.setFontSize(10);
+    doc.setTextColor(100, 116, 139);
+    doc.text(`EVENTO: ${event.name.toUpperCase()}  |  DATA: ${new Date(event.date).toLocaleDateString('pt-BR')}`, 105, 35, { align: 'center' });
+
+    const assignments = seatAssignments.filter(sa => sa.transportId === transportId);
+    
+    // Create data for all seats
+    const allSeats = [];
+    for (let i = 1; i <= transport.capacity; i++) {
+      const assignment = assignments.find(sa => sa.seatNumber === i);
+      const person = assignment ? people.find(p => p.id === assignment.personId) : null;
+      allSeats.push({
+        num: i,
+        name: person ? person.name : '____________________________________'
+      });
+    }
+
+    // Split into two columns for the PDF
+    const half = Math.ceil(allSeats.length / 2);
+    const leftColumn = allSeats.slice(0, half);
+    const rightColumn = allSeats.slice(half);
+
+    const tableData = [];
+    for (let i = 0; i < half; i++) {
+      const left = leftColumn[i];
+      const right = rightColumn[i] || { num: '', name: '' };
+      tableData.push([
+        left.num.toString(), left.name,
+        '', // Spacer
+        right.num.toString(), right.name
+      ]);
+    }
+
+    autoTable(doc, {
+      startY: 45,
+      head: [['Polt.', 'Nome do Passageiro', '', 'Polt.', 'Nome do Passageiro']],
+      body: tableData,
+      theme: 'plain',
+      styles: { 
+        fontSize: 9, 
+        cellPadding: 2.5,
+        textColor: [51, 65, 85]
+      },
+      headStyles: { 
+        fillColor: [248, 250, 252], 
+        textColor: [15, 23, 42], 
+        fontStyle: 'bold',
+        lineWidth: 0.1,
+        lineColor: [226, 232, 240],
+        cellPadding: 3
+      },
+      columnStyles: {
+        0: { cellWidth: 12, fontStyle: 'bold', halign: 'center' },
+        1: { cellWidth: 78 },
+        2: { cellWidth: 10 }, // Spacer column
+        3: { cellWidth: 12, fontStyle: 'bold', halign: 'center' },
+        4: { cellWidth: 78 }
+      },
+      didDrawCell: (data) => {
+        // Draw bottom border for rows
+        if (data.section === 'body') {
+          doc.setDrawColor(241, 245, 249);
+          doc.line(data.cell.x, data.cell.y + data.cell.height, data.cell.x + data.cell.width, data.cell.y + data.cell.height);
+        }
+      }
+    });
+
+    // Footer
+    const pageCount = doc.getNumberOfPages();
+    for (let i = 1; i <= pageCount; i++) {
+      doc.setPage(i);
+      doc.setFontSize(8);
+      doc.setTextColor(148, 163, 184);
+      doc.text(`Gerado em ${new Date().toLocaleString('pt-BR')}  |  Página ${i} de ${pageCount}`, 105, 285, { align: 'center' });
+    }
+
+    doc.save(`lista_passageiros_${transportName.toLowerCase().replace(/\s+/g, '_')}.pdf`);
   };
 
   const sendPDFToCaptain = () => {
@@ -1066,22 +1122,22 @@ export default function App() {
             Gestor de Eventos
           </h1>
           <div className="flex items-center gap-3">
-            <div className="flex bg-zinc-100/80 backdrop-blur-sm p-1.5 rounded-xl overflow-x-auto max-w-full no-scrollbar shadow-inner">
-              <button
-                onClick={() => {
-                  setActiveTab('events');
-                  setSelectedEventId(null);
-                }}
-                className={`flex items-center gap-2 px-6 py-2 rounded-lg text-sm font-bold transition-all whitespace-nowrap ${
-                  activeTab === 'events' 
-                  ? 'bg-white text-indigo-600 shadow-sm' 
-                  : 'text-zinc-500 hover:text-zinc-700'
-                }`}
-              >
-                <Calendar className="w-4 h-4" />
-                Eventos
-              </button>
-            </div>
+          <div className="flex bg-zinc-100 p-1 rounded-xl overflow-x-auto max-w-full no-scrollbar shadow-inner">
+            <button
+              onClick={() => {
+                setActiveTab('events');
+                setSelectedEventId(null);
+              }}
+              className={`flex items-center gap-2.5 px-6 py-2.5 rounded-lg text-sm font-bold transition-all whitespace-nowrap active:scale-95 ${
+                activeTab === 'events' 
+                ? 'bg-white text-indigo-600 shadow-sm' 
+                : 'text-zinc-500 hover:text-zinc-700'
+              }`}
+            >
+              <Calendar className="w-4 h-4" />
+              Eventos
+            </button>
+          </div>
             <div className="flex items-center gap-2">
               <button
                 onClick={() => setShowSettingsModal(true)}
@@ -1134,8 +1190,8 @@ export default function App() {
                         exit={{ opacity: 0, scale: 0.95, y: 20 }}
                         className="relative w-full max-w-md bg-white rounded-3xl shadow-2xl border border-zinc-200 overflow-hidden"
                       >
-                        <div className="p-6 border-b border-zinc-100 flex items-center justify-between bg-zinc-50/50">
-                          <h2 className="text-xl font-bold text-zinc-900">
+                        <div className="p-5 sm:p-6 border-b border-zinc-100 flex items-center justify-between bg-zinc-50/50">
+                          <h2 className="text-lg sm:text-xl font-bold text-zinc-900">
                             {editingEventId ? 'Editar Evento' : 'Novo Evento'}
                           </h2>
                           <button
@@ -1144,13 +1200,13 @@ export default function App() {
                               setEditingEventId(null);
                               setFormData({ name: '', date: '', days: '', location: '' });
                             }}
-                            className="p-2 hover:bg-zinc-100 rounded-full text-zinc-400 transition-colors"
+                            className="p-2.5 hover:bg-zinc-100 rounded-full text-zinc-400 transition-colors active:scale-95"
                           >
                             <X className="w-5 h-5" />
                           </button>
                         </div>
                         
-                        <form onSubmit={handleSubmit} className="p-6 space-y-5">
+                        <form onSubmit={handleSubmit} className="p-5 sm:p-6 space-y-6">
                           <div>
                             <label htmlFor="name" className="block text-sm font-medium text-zinc-700 mb-1">
                               Nome do Evento
@@ -1268,13 +1324,13 @@ export default function App() {
                             </div>
                             <div className="min-w-0">
                               <h3 className="font-bold text-zinc-900 text-sm md:text-base truncate">{event.name}</h3>
-                              <div className="flex flex-wrap gap-x-3 gap-y-0.5 mt-0.5 text-[11px] md:text-xs text-zinc-500">
+                              <div className="flex flex-wrap gap-x-3 gap-y-1 mt-1 text-xs text-zinc-500">
                                 <span className="flex items-center gap-1">
-                                  <Calendar className="w-3 h-3" />
+                                  <Calendar className="w-3.5 h-3.5" />
                                   {new Date(event.date).toLocaleDateString('pt-BR')} ({event.days} {event.days === 1 ? 'dia' : 'dias'})
                                 </span>
                                 <span className="flex items-center gap-1 truncate max-w-[150px]">
-                                  <MapPin className="w-3 h-3" />
+                                  <MapPin className="w-3.5 h-3.5" />
                                   {event.location}
                                 </span>
                               </div>
@@ -1329,50 +1385,39 @@ export default function App() {
                     <Plus className="w-4 h-4 rotate-45" />
                     Voltar
                   </button>
-                  <div className="flex bg-zinc-100/80 backdrop-blur-sm p-1.5 rounded-xl overflow-x-auto max-w-full no-scrollbar shadow-inner">
+                  <div className="flex bg-zinc-100 p-1 rounded-xl overflow-x-auto max-w-[200px] sm:max-w-full no-scrollbar shadow-inner">
                     <button
                       onClick={() => setEventViewTab('transport')}
-                      className={`flex items-center gap-2 px-4 py-2.5 rounded-lg text-[11px] font-bold uppercase tracking-wider transition-all whitespace-nowrap ${
+                      className={`flex items-center gap-2.5 px-4 py-2.5 rounded-lg text-xs font-bold uppercase tracking-wider transition-all whitespace-nowrap active:scale-95 ${
                         eventViewTab === 'transport' 
                         ? 'bg-white text-indigo-600 shadow-sm' 
                         : 'text-zinc-500 hover:text-zinc-700'
                       }`}
                     >
-                      <Bus className="w-3.5 h-3.5" />
+                      <Bus className="w-4 h-4" />
                       Transporte
                     </button>
                     <button
                       onClick={() => setEventViewTab('people')}
-                      className={`flex items-center gap-2 px-4 py-2.5 rounded-lg text-[11px] font-bold uppercase tracking-wider transition-all whitespace-nowrap ${
+                      className={`flex items-center gap-2.5 px-4 py-2.5 rounded-lg text-xs font-bold uppercase tracking-wider transition-all whitespace-nowrap active:scale-95 ${
                         eventViewTab === 'people' 
                         ? 'bg-white text-indigo-600 shadow-sm' 
                         : 'text-zinc-500 hover:text-zinc-700'
                       }`}
                     >
-                      <Users className="w-3.5 h-3.5" />
+                      <Users className="w-4 h-4" />
                       Pessoas
                     </button>
                     <button
                       onClick={() => setEventViewTab('payments')}
-                      className={`flex items-center gap-2 px-4 py-2.5 rounded-lg text-[11px] font-bold uppercase tracking-wider transition-all whitespace-nowrap ${
+                      className={`flex items-center gap-2.5 px-4 py-2.5 rounded-lg text-xs font-bold uppercase tracking-wider transition-all whitespace-nowrap active:scale-95 ${
                         eventViewTab === 'payments' 
                         ? 'bg-white text-indigo-600 shadow-sm' 
                         : 'text-zinc-500 hover:text-zinc-700'
                       }`}
                     >
-                      <DollarSign className="w-3.5 h-3.5" />
+                      <DollarSign className="w-4 h-4" />
                       Pagamentos
-                    </button>
-                    <button
-                      onClick={() => setEventViewTab('ordered-list')}
-                      className={`flex items-center gap-2 px-4 py-2.5 rounded-lg text-[11px] font-bold uppercase tracking-wider transition-all whitespace-nowrap ${
-                        eventViewTab === 'ordered-list' 
-                        ? 'bg-white text-indigo-600 shadow-sm' 
-                        : 'text-zinc-500 hover:text-zinc-700'
-                      }`}
-                    >
-                      <List className="w-3.5 h-3.5" />
-                      Lista Ordenada
                     </button>
                   </div>
                 </div>
@@ -1380,17 +1425,17 @@ export default function App() {
                 {/* Event Info Card */}
                 {events.find(e => e.id === selectedEventId) && (
                   <div className="bg-white p-3 md:p-6 rounded-2xl shadow-sm border border-zinc-200">
-                    <div className="flex flex-col md:flex-row md:items-center justify-between gap-2 mb-3 md:mb-6">
+                    <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 mb-4 md:mb-6">
                       <div>
-                        <h2 className="text-base md:text-xl font-bold text-zinc-900">{events.find(e => e.id === selectedEventId)?.name}</h2>
-                        <div className="flex flex-wrap gap-x-3 gap-y-1 mt-1 text-[11px] md:text-sm text-zinc-500">
-                          <span className="flex items-center gap-1">
-                            <Calendar className="w-3.5 h-3.5" />
+                        <h2 className="text-lg md:text-xl font-bold text-zinc-900">{events.find(e => e.id === selectedEventId)?.name}</h2>
+                        <div className="flex flex-wrap gap-x-4 gap-y-1.5 mt-1.5 text-xs md:text-sm text-zinc-500">
+                          <span className="flex items-center gap-1.5">
+                            <Calendar className="w-4 h-4" />
                             {new Date(events.find(e => e.id === selectedEventId)!.date).toLocaleDateString('pt-BR')}
-                            <span className="text-zinc-400">({events.find(e => e.id === selectedEventId)?.days} {events.find(e => e.id === selectedEventId)?.days === 1 ? 'dia' : 'dias'})</span>
+                            <span className="text-zinc-400 font-medium">({events.find(e => e.id === selectedEventId)?.days} {events.find(e => e.id === selectedEventId)?.days === 1 ? 'dia' : 'dias'})</span>
                           </span>
-                          <span className="flex items-center gap-1">
-                            <MapPin className="w-3.5 h-3.5" />
+                          <span className="flex items-center gap-1.5">
+                            <MapPin className="w-4 h-4" />
                             {events.find(e => e.id === selectedEventId)?.location}
                           </span>
                         </div>
@@ -1551,7 +1596,7 @@ export default function App() {
                               </div>
                               <div className="min-w-0">
                                 <h4 className="font-bold text-zinc-900 text-sm md:text-base truncate">{transport.name || transport.type}</h4>
-                                <p className="text-[10px] md:text-sm text-zinc-500 truncate">
+                                <p className="text-xs md:text-sm text-zinc-500 truncate">
                                   {transport.name ? transport.type + ' • ' : ''}
                                   {transport.capacity} pessoas • R$ {transport.pricePerPerson.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}/pessoa
                                 </p>
@@ -1563,11 +1608,19 @@ export default function App() {
                                   setSelectedTransportId(transport.id);
                                   setShowSeatMap(true);
                                 }}
-                                className="flex items-center gap-1 p-2 md:px-3 md:py-1.5 bg-emerald-50 text-emerald-600 hover:bg-emerald-100 rounded-lg text-[10px] font-bold uppercase transition-all"
+                                className="flex items-center gap-1.5 px-3 py-2 bg-emerald-50 text-emerald-600 hover:bg-emerald-100 rounded-xl text-[11px] md:text-xs font-bold uppercase transition-all active:scale-95 shadow-sm shadow-emerald-100/20"
                                 title="Mapa de Assentos"
                               >
-                                <CheckSquare className="w-3.5 h-3.5 md:w-3.5 h-3.5" />
-                                <span className="hidden md:inline">Mapa de Assentos</span>
+                                <CheckSquare className="w-4 h-4" />
+                                <span className="hidden sm:inline">Mapa de Assentos</span>
+                              </button>
+                              <button
+                                onClick={() => generateTransportPDF(transport.id)}
+                                className="flex items-center gap-1.5 px-3 py-2 bg-indigo-50 text-indigo-600 hover:bg-indigo-100 rounded-xl text-[11px] md:text-xs font-bold uppercase transition-all active:scale-95 shadow-sm shadow-indigo-100/20"
+                                title="Exportar Lista em PDF"
+                              >
+                                <FileDown className="w-4 h-4" />
+                                <span className="hidden sm:inline">PDF</span>
                               </button>
                               <button
                                 onClick={() => startEditTransport(transport)}
@@ -1649,14 +1702,14 @@ export default function App() {
                                   <div className="flex items-center gap-2">
                                     <h3 className="font-bold text-zinc-900 text-sm md:text-lg truncate">{person.name}</h3>
                                     {person.isCaptain && (
-                                      <span className="bg-indigo-100 text-indigo-700 text-[7px] md:text-[9px] font-black uppercase px-1 py-0.5 rounded-md flex items-center gap-1 shrink-0">
-                                        <Shield className="w-2 h-2 md:w-2.5 h-2.5" />
+                                      <span className="bg-indigo-100 text-indigo-700 text-[10px] md:text-[11px] font-black uppercase px-2 py-0.5 rounded-md flex items-center gap-1 shrink-0">
+                                        <Shield className="w-2.5 h-2.5 md:w-3 h-3" />
                                         Capitão
                                       </span>
                                     )}
                                   </div>
-                                  <div className="flex items-center gap-2 mt-0.5 text-[10px] md:text-sm text-zinc-500">
-                                    <Phone className="w-3 h-3 md:w-3.5 h-3.5" />
+                                  <div className="flex items-center gap-2 mt-1 text-xs md:text-sm text-zinc-500">
+                                    <Phone className="w-3.5 h-3.5 md:w-4 h-4" />
                                     {person.phone}
                                   </div>
                                 </div>
@@ -1892,14 +1945,14 @@ export default function App() {
                                     <div className="flex items-center gap-2 min-w-0">
                                       <h4 className="font-bold text-zinc-900 text-sm md:text-base truncate">{person.name}</h4>
                                       {person.isCaptain && (
-                                        <span className="bg-indigo-100 text-indigo-700 text-[8px] md:text-[9px] font-black uppercase px-1.5 py-0.5 rounded-md flex items-center gap-1 shrink-0">
-                                          <Shield className="w-2 h-2 md:w-2.5 h-2.5" />
+                                        <span className="bg-indigo-100 text-indigo-700 text-[10px] md:text-[11px] font-black uppercase px-2 py-0.5 rounded-md flex items-center gap-1 shrink-0">
+                                          <Shield className="w-2.5 h-2.5 md:w-3 h-3" />
                                           Capitão
                                         </span>
                                       )}
                                     </div>
-                                  <div className="flex flex-col items-end gap-1.5 md:gap-2 shrink-0">
-                                    <span className={`px-2 py-0.5 md:px-3 md:py-1 rounded-full text-[9px] md:text-[10px] font-bold uppercase tracking-wider ${
+                                  <div className="flex flex-col items-end gap-2 shrink-0">
+                                    <span className={`px-2.5 py-1 md:px-3 md:py-1 rounded-full text-[10px] md:text-[11px] font-bold uppercase tracking-wider ${
                                       isFullyPaid ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'
                                     }`}>
                                       {isFullyPaid ? 'Pago' : 'Pendente'}
@@ -1918,33 +1971,33 @@ export default function App() {
                                               }
                                             });
                                           }}
-                                          className="flex items-center gap-1 px-2 py-1 md:px-3 md:py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-[9px] md:text-[10px] font-bold uppercase tracking-wider transition-all active:scale-95 shadow-sm shadow-indigo-100"
+                                          className="flex items-center gap-1.5 px-3 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-[10px] md:text-[11px] font-bold uppercase tracking-wider transition-all active:scale-95 shadow-lg shadow-indigo-100"
                                           title="Informar pagamento total"
                                         >
-                                          <DollarSign className="w-3 h-3 md:w-3.5 h-3.5" />
+                                          <DollarSign className="w-3.5 h-3.5 md:w-4 h-4" />
                                           Pagar
                                         </button>
                                         <button
                                           onClick={() => handleWhatsAppClick(person, price - totalPaid)}
-                                          className="flex items-center gap-1 px-2 py-1 md:px-3 md:py-1.5 bg-emerald-500 hover:bg-emerald-600 text-white rounded-lg text-[9px] md:text-[10px] font-bold uppercase tracking-wider transition-all active:scale-95 shadow-sm shadow-emerald-100"
+                                          className="flex items-center gap-1.5 px-3 py-2 bg-emerald-500 hover:bg-emerald-600 text-white rounded-xl text-[10px] md:text-[11px] font-bold uppercase tracking-wider transition-all active:scale-95 shadow-lg shadow-emerald-100"
                                         >
-                                          <MessageCircle className="w-3 h-3 md:w-3.5 h-3.5" />
+                                          <MessageCircle className="w-3.5 h-3.5 md:w-4 h-4" />
                                           Cobrar
                                         </button>
                                       </div>
                                     )}
                                   </div>
                                 </div>
-                                <div className="w-full bg-zinc-100 h-1.5 md:h-2 rounded-full overflow-hidden">
+                                <div className="w-full bg-zinc-100 h-2 md:h-2.5 rounded-full overflow-hidden">
                                   <motion.div 
                                     initial={{ width: 0 }}
                                     animate={{ width: `${percentage}%` }}
                                     className={`h-full transition-all ${isFullyPaid ? 'bg-emerald-500' : 'bg-indigo-500'}`}
                                   />
                                 </div>
-                                <div className="flex justify-between mt-1.5 text-[9px] md:text-[10px] font-bold text-zinc-400 uppercase tracking-widest">
+                                <div className="flex justify-between mt-2 text-[10px] md:text-[11px] font-bold text-zinc-400 uppercase tracking-widest">
                                   <span>{percentage.toFixed(0)}%</span>
-                                  <span>R$ {price.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</span>
+                                  <span className="text-zinc-600">R$ {price.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</span>
                                 </div>
                               </div>
                             );
@@ -1987,8 +2040,8 @@ export default function App() {
                                           <DollarSign className="w-3.5 h-3.5 md:w-4 h-4" />
                                         </div>
                                         <div>
-                                          <p className="font-bold text-zinc-900 text-[13px] md:text-sm">{person?.name || 'Pessoa excluída'}</p>
-                                          <p className="text-[11px] md:text-xs text-emerald-600 font-medium">R$ {payment.amountPaid.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</p>
+                                          <p className="font-bold text-zinc-900 text-sm md:text-base">{person?.name || 'Pessoa excluída'}</p>
+                                          <p className="text-xs text-emerald-600 font-medium">R$ {payment.amountPaid.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</p>
                                         </div>
                                       </div>
                                       <div className="flex gap-1 md:opacity-0 md:group-hover:opacity-100 transition-opacity">
@@ -2027,71 +2080,7 @@ export default function App() {
                     </div>
                   )}
 
-                  {eventViewTab === 'ordered-list' && (
-                    <div className="space-y-8">
-                      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-                        <div>
-                          <h2 className="text-xl font-bold text-zinc-900">Lista Ordenada</h2>
-                          <p className="text-zinc-500 text-sm">Arraste para reordenar a lista de embarque</p>
-                        </div>
-                        <div className="flex flex-col sm:flex-row gap-2">
-                          <button
-                            onClick={sendPDFToCaptain}
-                            disabled={!people.some(p => p.isCaptain)}
-                            className={`flex items-center justify-center gap-2 px-4 py-3 rounded-xl transition-all shadow-lg font-bold text-sm w-full sm:w-auto ${
-                              people.some(p => p.isCaptain)
-                              ? 'bg-emerald-600 text-white hover:bg-emerald-700 shadow-emerald-100 active:scale-95'
-                              : 'bg-zinc-100 text-zinc-400 cursor-not-allowed'
-                            }`}
-                          >
-                            <MessageCircle className="w-4 h-4" />
-                            Enviar ao Capitão
-                          </button>
-                          <button
-                            onClick={generateOrderedPDF}
-                            className="flex items-center justify-center gap-2 px-4 py-3 bg-indigo-600 text-white rounded-xl hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-100 font-bold text-sm w-full sm:w-auto active:scale-95"
-                          >
-                            <FileDown className="w-4 h-4" />
-                            Gerar PDF
-                          </button>
-                        </div>
-                      </div>
 
-                      {people.length === 0 ? (
-                        <div className="text-center py-12 bg-white rounded-2xl border border-dashed border-zinc-300">
-                          <List className="w-10 h-10 text-zinc-300 mx-auto mb-3" />
-                          <p className="text-zinc-500 text-sm">Nenhuma pessoa para ordenar.</p>
-                        </div>
-                      ) : (
-                        <Reorder.Group
-                          axis="y"
-                          values={people}
-                          onReorder={updatePeopleOrder}
-                          className="space-y-3"
-                        >
-                          {people.map((person, index) => (
-                            <Reorder.Item
-                              key={person.id}
-                              value={person}
-                              className="bg-white p-4 rounded-2xl shadow-sm border border-zinc-200 flex items-center gap-4 cursor-grab active:cursor-grabbing hover:border-indigo-200 transition-colors"
-                            >
-                              <div className="flex items-center justify-center w-8 h-8 bg-indigo-50 text-indigo-600 rounded-full font-bold text-sm shrink-0">
-                                {index + 1}
-                              </div>
-                              <div className="flex-1 min-w-0">
-                                <h3 className="font-bold text-zinc-900 truncate">{person.name}</h3>
-                                <p className="text-zinc-500 text-xs">{person.phone}</p>
-                              </div>
-                              <div className="text-zinc-300">
-                                <GripVertical className="w-5 h-5" />
-                              </div>
-                            </Reorder.Item>
-                          ))}
-                        </Reorder.Group>
-                        )
-                      }
-                    </div>
-                  )}
                 </div>
               </motion.div>
         )
@@ -2412,35 +2401,45 @@ export default function App() {
                       <p className="text-xs text-zinc-500">Mapa de Assentos - {seatAssignments.filter(sa => sa.transportId === selectedTransportId).length} / {transports.find(t => t.id === selectedTransportId)?.capacity} ocupados</p>
                     </div>
                   </div>
-                  <button
-                    onClick={() => {
-                      setShowSeatMap(false);
-                      setSelectedSeatNumber(null);
-                    }}
-                    className="p-2 hover:bg-zinc-100 rounded-full text-zinc-400 transition-colors"
-                  >
-                    <X className="w-5 h-5" />
-                  </button>
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => generateTransportPDF(selectedTransportId)}
+                      className="flex items-center gap-2 px-3 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold uppercase transition-all shadow-lg shadow-indigo-100"
+                    >
+                      <FileDown className="w-4 h-4" />
+                      <span className="hidden sm:inline">Exportar PDF</span>
+                    </button>
+                    <button
+                      onClick={() => {
+                        setShowSeatMap(false);
+                        setSelectedSeatNumber(null);
+                      }}
+                      className="p-2 hover:bg-zinc-100 rounded-full text-zinc-400 transition-colors"
+                    >
+                      <X className="w-5 h-5" />
+                    </button>
+                  </div>
                 </div>
 
-                <div className="flex-1 flex flex-col md:flex-row overflow-hidden">
+                <div className="flex-1 flex flex-col md:flex-row overflow-hidden relative">
                   {/* Left: Seat Map */}
-                  <div className="flex-1 overflow-y-auto p-4 md:p-8 bg-zinc-50/30">
+                  <div className={`flex-1 overflow-y-auto p-4 md:p-8 bg-zinc-50/30 transition-all ${selectedSeatNumber && isMobile ? 'pb-80' : ''}`}>
                     <div className="max-w-md mx-auto bg-white p-6 md:p-10 rounded-[3rem] shadow-sm border border-zinc-100 border-t-[12px] border-t-zinc-200 relative mb-10">
                       {/* Driver Area */}
-                      <div className="absolute top-0 left-1/2 -translate-x-1/2 -translate-y-full mb-4 flex items-center justify-center p-4 bg-zinc-200 w-24 h-12 rounded-t-3xl">
+                      <div className="absolute top-0 left-1/2 -translate-x-1/2 -translate-y-full mb-4 flex items-center justify-center p-4 bg-zinc-200 w-24 h-12 rounded-t-3xl shadow-sm">
                         <div className="w-8 h-8 rounded-full border-2 border-zinc-400 flex items-center justify-center">
                           <div className="w-4 h-1 bg-zinc-400 rounded-full" />
                         </div>
                       </div>
 
-                      <div className="grid grid-cols-5 gap-3">
+                      <div className="grid grid-cols-5 gap-2 md:gap-3">
                         {Array.from({ length: Math.ceil((transports.find(t => t.id === selectedTransportId)?.capacity || 0) / 4) }).map((_, rowIndex) => (
-                           <div key={rowIndex} className="col-span-5 grid grid-cols-5 gap-3 mb-2">
+                           <div key={rowIndex} className="col-span-5 grid grid-cols-5 gap-2 md:gap-3 mb-2">
                              {[0, 1, 3, 4].map(colIndex => {
                                const seatIndex = rowIndex * 4 + (colIndex > 2 ? colIndex - 1 : colIndex);
                                const seatNum = seatIndex + 1;
-                               if (seatNum > (transports.find(t => t.id === selectedTransportId)?.capacity || 0)) {
+                               const maxCap = transports.find(t => t.id === selectedTransportId)?.capacity || 0;
+                               if (seatNum > maxCap) {
                                  return <div key={colIndex} className="aspect-square" />;
                                }
 
@@ -2456,16 +2455,16 @@ export default function App() {
                                      person 
                                        ? 'bg-emerald-50 border-emerald-500 text-emerald-700 shadow-sm shadow-emerald-100' 
                                        : isSelected 
-                                         ? 'bg-indigo-50 border-indigo-500 text-indigo-700 shadow-md ring-4 ring-indigo-500/10'
-                                         : 'bg-white border-zinc-100 text-zinc-400 hover:border-zinc-300'
+                                         ? 'bg-indigo-50 border-indigo-500 text-indigo-700 shadow-md ring-4 ring-indigo-500/20'
+                                         : 'bg-white border-zinc-200 text-zinc-400 hover:border-zinc-300 active:scale-95'
                                    }`}
                                  >
-                                   <span className={`text-[10px] font-black ${isSelected ? 'scale-110' : ''} transition-transform`}>{seatNum}</span>
-                                   {person && <User className="w-3.5 h-3.5 mt-1" />}
+                                   <span className={`text-[10px] md:text-xs font-black ${isSelected ? 'scale-110' : ''} transition-transform`}>{seatNum}</span>
+                                   {person && <User className="w-3 h-3 md:w-3.5 h-3.5 mt-0.5 md:mt-1 font-bold" />}
                                    
                                    {/* Tooltip for desktop */}
-                                   {person && (
-                                     <div className="absolute -top-12 left-1/2 -translate-x-1/2 bg-zinc-900 text-white text-[10px] py-1.5 px-3 rounded-lg whitespace-nowrap opacity-0 group-hover:opacity-100 pointer-events-none z-20 transition-all shadow-xl">
+                                   {(person && !isMobile) && (
+                                     <div className="absolute -top-12 left-1/2 -translate-x-1/2 bg-zinc-900 text-white text-[10px] py-1.5 px-3 rounded-lg whitespace-nowrap opacity-0 md:group-hover:opacity-100 pointer-events-none z-20 transition-all shadow-xl">
                                        {person.name}
                                        <div className="absolute top-full left-1/2 -translate-x-1/2 border-8 border-transparent border-t-zinc-900" />
                                      </div>
@@ -2482,27 +2481,41 @@ export default function App() {
                   </div>
 
                   {/* Right: Assignment Panel */}
-                  <div className="w-full md:w-80 border-t md:border-t-0 md:border-l border-zinc-100 flex flex-col bg-white shrink-0 overflow-hidden">
-                    <div className="p-4 border-b border-zinc-100 bg-zinc-50/30">
-                      <h4 className="text-sm font-bold text-zinc-900 mb-3 flex items-center gap-2">
+                  <motion.div 
+                    initial={false}
+                    animate={{ 
+                      y: (selectedSeatNumber || !isMobile) ? 0 : '100%',
+                    }}
+                    className={`fixed md:relative bottom-0 left-0 right-0 md:translate-y-0 w-full md:w-80 border-t md:border-t-0 md:border-l border-zinc-100 flex flex-col bg-white shrink-0 z-20 shadow-[0_-10px_40px_rgba(0,0,0,0.1)] md:shadow-none rounded-t-[2.5rem] md:rounded-none h-80 md:h-auto overflow-hidden`}
+                  >
+                    <div className="p-5 md:p-6 border-b border-zinc-100 bg-zinc-50/30 flex items-center justify-between">
+                      <h4 className="text-sm font-bold text-zinc-900 flex items-center gap-2">
                         {selectedSeatNumber ? (
                           <>
-                            <span className="w-2 h-6 bg-indigo-500 rounded-full" />
+                            <span className="w-2.5 h-6 bg-indigo-500 rounded-full" />
                             Assento {selectedSeatNumber}
                           </>
                         ) : 'Selecione um lugar'}
                       </h4>
-                      
+                      <button 
+                        onClick={() => setSelectedSeatNumber(null)}
+                        className="p-2 md:hidden hover:bg-zinc-100 rounded-full text-zinc-400 transition-colors active:scale-95"
+                      >
+                        <X className="w-5 h-5" />
+                      </button>
+                    </div>
+
+                    <div className="flex-1 overflow-y-auto p-5 md:p-6">
                       {selectedSeatNumber ? (
                         <>
                           {seatAssignments.find(sa => sa.transportId === selectedTransportId && sa.seatNumber === selectedSeatNumber) ? (
-                            <div className="p-4 bg-emerald-50 rounded-2xl border border-emerald-100 mb-3 overflow-hidden transition-all">
+                            <div className="p-5 bg-emerald-50 rounded-2xl border border-emerald-100 overflow-hidden transition-all shadow-sm">
                               <p className="text-[10px] uppercase font-black text-emerald-600 mb-1 tracking-widest">Ocupado por:</p>
-                              <div className="flex items-center gap-2 mb-4">
-                                <div className="bg-emerald-200 p-1.5 rounded-lg">
-                                  <User className="w-4 h-4 text-emerald-700" />
+                              <div className="flex items-center gap-3 mb-5">
+                                <div className="bg-emerald-200 p-2 rounded-xl">
+                                  <User className="w-5 h-5 text-emerald-700" />
                                 </div>
-                                <p className="text-sm font-bold text-emerald-900 truncate">
+                                <p className="text-base font-bold text-emerald-900 truncate">
                                   {people.find(p => p.id === seatAssignments.find(sa => sa.transportId === selectedTransportId && sa.seatNumber === selectedSeatNumber)?.personId)?.name}
                                 </p>
                               </div>
@@ -2511,81 +2524,69 @@ export default function App() {
                                   const assignment = seatAssignments.find(sa => sa.transportId === selectedTransportId && sa.seatNumber === selectedSeatNumber);
                                   if (assignment) unassignSeat(assignment.id);
                                 }}
-                                className="w-full py-2.5 bg-white text-red-600 border border-red-100 rounded-xl text-[10px] font-bold uppercase hover:bg-red-50 transition-colors flex items-center justify-center gap-2"
+                                className="w-full py-3.5 bg-white text-red-600 border border-red-200 rounded-2xl text-xs font-bold uppercase hover:bg-red-50 transition-all flex items-center justify-center gap-2 active:scale-95 shadow-sm"
                               >
-                                <Trash2 className="w-3.5 h-3.5" />
+                                <Trash2 className="w-4 h-4" />
                                 Remover da Cadeira
                               </button>
                             </div>
                           ) : (
-                            <div className="relative mb-3">
-                              <List className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-400" />
-                              <input
-                                type="text"
-                                placeholder="Buscar passageiro..."
-                                value={passengerSearch}
-                                onChange={e => setPassengerSearch(e.target.value)}
-                                className="w-full pl-10 pr-4 py-2.5 bg-white border border-zinc-200 rounded-xl text-sm focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
-                              />
+                            <div className="space-y-4">
+                              <div className="relative">
+                                <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4.5 h-4.5 text-zinc-400" />
+                                <input
+                                  type="text"
+                                  placeholder="Buscar passageiro..."
+                                  value={passengerSearch}
+                                  onChange={e => setPassengerSearch(e.target.value)}
+                                  className="w-full pl-11 pr-4 py-3 bg-zinc-50 border border-zinc-200 rounded-2xl text-sm focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
+                                />
+                              </div>
+
+                              <div className="space-y-2">
+                                <p className="text-[10px] font-black text-zinc-400 uppercase tracking-widest pl-1 mb-1">Escolher Passageiro</p>
+                                {people
+                                  .filter(person => {
+                                    const searchMatch = person.name.toLowerCase().includes(passengerSearch.toLowerCase());
+                                    const isAssignedInThisEvent = seatAssignments.some(sa => {
+                                      const t = transports.find(trans => trans.id === sa.transportId);
+                                      return sa.personId === person.id && t?.eventId === selectedEventId;
+                                    });
+                                    return searchMatch && !isAssignedInThisEvent;
+                                  })
+                                  .slice(0, 5)
+                                  .map(person => (
+                                    <button
+                                      key={person.id}
+                                      onClick={() => {
+                                        assignSeat(selectedTransportId!, selectedSeatNumber, person.id);
+                                        setSelectedSeatNumber(null);
+                                        setPassengerSearch('');
+                                      }}
+                                      className="w-full p-4 bg-white border border-zinc-100 rounded-2xl text-left hover:border-indigo-300 hover:bg-indigo-50 transition-all active:scale-[0.98] flex items-center gap-3 shadow-sm"
+                                    >
+                                      <div className="bg-zinc-100 p-2 rounded-xl">
+                                        <User className="w-4 h-4 text-zinc-500" />
+                                      </div>
+                                      <span className="font-bold text-sm text-zinc-700">{person.name}</span>
+                                    </button>
+                                  ))}
+                              </div>
                             </div>
                           )}
                         </>
                       ) : (
-                        <div className="bg-indigo-50 p-4 rounded-2xl border border-indigo-100">
-                          <p className="text-xs text-indigo-700 leading-relaxed font-medium">
+                        <div className="hidden md:block bg-indigo-50 p-6 rounded-3xl border border-indigo-100 text-center">
+                          <div className="w-16 h-16 bg-white rounded-2xl shadow-sm mx-auto mb-4 flex items-center justify-center">
+                            <Info className="w-8 h-8 text-indigo-500" />
+                          </div>
+                          <p className="text-sm text-indigo-700 leading-relaxed font-bold">
                             Selecione uma cadeira vazia no mapa do veículo para atribuir um passageiro a ela.
                           </p>
                         </div>
                       )}
                     </div>
-
-                    <div className="flex-1 overflow-y-auto p-4">
-                      {selectedSeatNumber && !seatAssignments.find(sa => sa.transportId === selectedTransportId && sa.seatNumber === selectedSeatNumber) && (
-                        <div className="space-y-2 pb-10">
-                          <p className="text-[10px] font-black text-zinc-400 uppercase tracking-widest pl-1 mb-3">Passageiros Disponíveis</p>
-                          {people
-                            .filter(person => {
-                              const searchMatch = person.name.toLowerCase().includes(passengerSearch.toLowerCase());
-                              const isAssignedInThisEvent = seatAssignments.some(sa => {
-                                const t = transports.find(trans => trans.id === sa.transportId);
-                                return sa.personId === person.id && t?.eventId === selectedEventId;
-                              });
-                              return searchMatch && !isAssignedInThisEvent;
-                            })
-                            .map(person => {
-                               const totalPaid = getTotalPaidByPersonForEvent(person.id, selectedEventId!);
-                               const transport = transports.find(t => t.eventId === selectedEventId);
-                               const price = (transport?.pricePerPerson || 0) * (events.find(e => e.id === selectedEventId)?.days || 0);
-                               const isPaid = price > 0 && totalPaid >= price;
-
-                               return (
-                                <button
-                                  key={person.id}
-                                  onClick={() => {
-                                    assignSeat(selectedTransportId, selectedSeatNumber, person.id);
-                                    setSelectedSeatNumber(null);
-                                    setPassengerSearch('');
-                                  }}
-                                  className="w-full text-left p-3.5 rounded-2xl border border-zinc-100 hover:border-indigo-200 hover:bg-indigo-50/50 transition-all flex items-center justify-between group bg-zinc-50/30"
-                                >
-                                  <div className="min-w-0 pr-2">
-                                    <p className="font-bold text-zinc-900 text-sm truncate">{person.name}</p>
-                                    <div className="flex items-center gap-2 mt-1">
-                                      <span className={`text-[8px] font-black py-0.5 px-2 rounded-md ${isPaid ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'}`}>
-                                        {isPaid ? 'PAGO' : 'PENDENTE'}
-                                      </span>
-                                    </div>
-                                  </div>
-                                  <div className="bg-white p-1.5 rounded-xl border border-zinc-100 text-zinc-400 group-hover:text-indigo-600 transition-colors shadow-sm">
-                                    <Plus className="w-4 h-4" />
-                                  </div>
-                                </button>
-                               );
-                            })}
-                        </div>
-                      )}
-                    </div>
-                  </div>
+                  </motion.div>
                 </div>
               </motion.div>
             </div>
