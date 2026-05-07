@@ -3,12 +3,13 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { useState, FormEvent, useEffect, ChangeEvent } from 'react';
-import { Calendar, MapPin, Plus, List, Trash2, CheckCircle2, Bus, Users, DollarSign, User, Phone, CreditCard, Edit2, MessageCircle, Filter, Settings, X, ExternalLink, FileText, Shield, CheckSquare, LogOut, FileDown, FileUp, AlertTriangle, Search, Info } from 'lucide-react';
+import { useState, FormEvent, useEffect, ChangeEvent, useMemo } from 'react';
+import { Calendar, MapPin, Plus, List, Trash2, CheckCircle2, Bus, Users, DollarSign, User, Phone, CreditCard, Edit2, MessageCircle, Filter, Settings, X, ExternalLink, FileText, Shield, CheckSquare, LogOut, FileDown, FileUp, AlertTriangle, Search, Info, Languages } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import { auth, db, googleProvider, signInWithPopup, signOut } from './firebase';
+import { Language, translations } from './translations';
 import { 
   collection, 
   onSnapshot, 
@@ -133,6 +134,28 @@ interface Payment {
 export default function App() {
   const [user, setUser] = useState<FirebaseUser | null>(null);
   const [isAuthReady, setIsAuthReady] = useState(false);
+
+  const [language, setLanguage] = useState<Language>(() => {
+    const saved = localStorage.getItem('appLanguage');
+    return (saved as Language) || 'pt';
+  });
+
+  useEffect(() => {
+    localStorage.setItem('appLanguage', language);
+  }, [language]);
+
+  const t = useMemo(() => {
+    return (key: keyof typeof translations.pt, params?: Record<string, string>) => {
+      let str = translations[language][key] || translations.pt[key] || key;
+      if (params) {
+        Object.entries(params).forEach(([k, v]) => {
+          str = str.replace(`{${k}}`, v);
+        });
+      }
+      return str;
+    };
+  }, [language]);
+
   const [activeTab, setActiveTab] = useState<'events'>('events');
   const [events, setEvents] = useState<Event[]>([]);
   const [transports, setTransports] = useState<Transport[]>([]);
@@ -207,7 +230,11 @@ export default function App() {
   const [importEventId, setImportEventId] = useState('');
 
   const [pixKey, setPixKey] = useState('');
-  const [paymentMessage, setPaymentMessage] = useState('Olá {nome}, tudo bem? Estou passando para lembrar do pagamento do evento {evento}. O valor pendente é de R$ {valor}. Chave PIX: {pix}');
+  const [paymentMessage, setPaymentMessage] = useState(() => {
+    if (language === 'en') return 'Hi {nome}, how are you? Just a reminder about the payment for event {evento}. The pending amount is $ {valor}. PIX Key: {pix}';
+    if (language === 'es') return 'Hola {nome}, ¿cómo estás? Te escribo para recordarte el pago del evento {evento}. El monto pendiente es € {valor}. Clave PIX: {pix}';
+    return 'Olá {nome}, tudo bem? Estou passando para lembrar do pagamento do evento {evento}. O valor pendente é de R$ {valor}. Chave PIX: {pix}';
+  });
   const [showSettingsModal, setShowSettingsModal] = useState(false);
 
   const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
@@ -361,12 +388,12 @@ export default function App() {
         document.body.removeChild(link);
       }
 
-      setSuccessMessage('Backup exportado com sucesso!');
+      setSuccessMessage(t('backupExported'));
       setShowSuccess(true);
       setTimeout(() => setShowSuccess(false), 3000);
     } catch (error: any) {
       console.error('Export error:', error);
-      setSuccessMessage(`Erro ao exportar: ${error.message || 'Permissão negada ou erro desconhecido'}`);
+      setSuccessMessage(`${t('error')}: ${error.message || t('error')}`);
       setShowSuccess(true);
       setTimeout(() => setShowSuccess(false), 5000);
     } finally {
@@ -472,7 +499,7 @@ export default function App() {
         }
       }
 
-      setSuccessMessage('Backup importado com sucesso!');
+      setSuccessMessage(t('backupImported'));
       setShowSuccess(true);
       setTimeout(() => setShowSuccess(false), 3000);
       setShowSettingsModal(false);
@@ -584,19 +611,19 @@ export default function App() {
     if (!event) return;
 
     const doc = new jsPDF();
-    const title = `Lista de Check-in: ${event.name}`;
-    const date = `Data: ${event.date}`;
-    const location = `Local: ${event.location}`;
+    const title = `${language === 'pt' ? 'Lista de Check-in' : (language === 'en' ? 'Check-in List' : 'Lista de Check-in')}: ${event.name}`;
+    const dateLabel = `${t('date')}: ${new Date(event.date).toLocaleDateString(language === 'en' ? 'en-US' : (language === 'es' ? 'es-ES' : 'pt-BR'))}`;
+    const locationLabel = `${t('location')}: ${event.location}`;
 
     doc.setFontSize(18);
     doc.text(title, 14, 22);
     doc.setFontSize(11);
-    doc.text(date, 14, 30);
-    doc.text(location, 14, 36);
+    doc.text(dateLabel, 14, 30);
+    doc.text(locationLabel, 14, 36);
 
-    const headers = [['Nome', ...Array.from({ length: event.days }, (_, i) => [`Dia ${i + 1} (Ida)`, `Dia ${i + 1} (Volta)`]).flat()]];
+    const headers = [[language === 'pt' ? 'Nome' : (language === 'en' ? 'Name' : 'Nombre'), ...Array.from({ length: event.days }, (_, i) => [`${language === 'pt' ? 'Dia' : (language === 'en' ? 'Day' : 'Día')} ${i + 1} (${language === 'pt' ? 'Ida' : (language === 'en' ? 'Out' : 'Ida')})`, `${language === 'pt' ? 'Dia' : (language === 'en' ? 'Day' : 'Día')} ${i + 1} (${language === 'pt' ? 'Volta' : (language === 'en' ? 'Return' : 'Vuelta')})`]).flat()]];
     const data = people.map(p => [
-      p.name,
+      p.isCaptain ? `${p.name} (${t('captain')})` : p.name,
       ...Array.from({ length: event.days * 2 }, () => '[ ]')
     ]);
 
@@ -629,15 +656,18 @@ export default function App() {
     doc.setFontSize(22);
     doc.setTextColor(30, 41, 59);
     doc.setFont('helvetica', 'bold');
-    doc.text('MAPA DE PASSAGEIROS', 105, 18, { align: 'center' });
+    doc.text(language === 'pt' ? 'MAPA DE PASSAGEIROS' : (language === 'en' ? 'PASSENGER MAP' : 'MAPA DE PASAJEROS'), 105, 18, { align: 'center' });
     
     doc.setFontSize(14);
     doc.setTextColor(71, 85, 105);
-    doc.text(`${transportName.toUpperCase()} - ${transport.capacity} LUGARES`, 105, 28, { align: 'center' });
+    doc.text(`${transportName.toUpperCase()} - ${transport.capacity} ${language === 'pt' ? 'LUGARES' : (language === 'en' ? 'SEATS' : 'LUGARES')}`, 105, 28, { align: 'center' });
 
     doc.setFontSize(10);
     doc.setTextColor(100, 116, 139);
-    doc.text(`EVENTO: ${event.name.toUpperCase()}  |  DATA: ${new Date(event.date).toLocaleDateString('pt-BR')}`, 105, 35, { align: 'center' });
+    
+    // Header details
+    const eventDetail = `${language === 'pt' ? 'EVENTO' : (language === 'en' ? 'EVENT' : 'EVENTO')}: ${event.name.toUpperCase()}  |  ${language === 'pt' ? 'DATA' : (language === 'en' ? 'DATE' : 'FECHA')}: ${new Date(event.date).toLocaleDateString(language === 'en' ? 'en-US' : (language === 'es' ? 'es-ES' : 'pt-BR'))}`;
+    doc.text(eventDetail, 105, 35, { align: 'center' });
 
     const assignments = seatAssignments.filter(sa => sa.transportId === transportId);
     
@@ -648,7 +678,7 @@ export default function App() {
       const person = assignment ? people.find(p => p.id === assignment.personId) : null;
       allSeats.push({
         num: i,
-        name: person ? person.name : '____________________________________'
+        name: person ? (person.isCaptain ? `${person.name} (${t('captain')})` : person.name) : '____________________________________'
       });
     }
 
@@ -670,7 +700,7 @@ export default function App() {
 
     autoTable(doc, {
       startY: 45,
-      head: [['Polt.', 'Nome do Passageiro', '', 'Polt.', 'Nome do Passageiro']],
+      head: [[language === 'pt' ? 'Polt.' : 'Seat', language === 'pt' ? 'Nome do Passageiro' : (language === 'en' ? 'Passenger Name' : 'Nombre del Pasajero'), '', language === 'pt' ? 'Polt.' : 'Seat', language === 'pt' ? 'Nome do Passageiro' : (language === 'en' ? 'Passenger Name' : 'Nombre del Pasajero')]],
       body: tableData,
       theme: 'plain',
       styles: { 
@@ -708,7 +738,7 @@ export default function App() {
       doc.setPage(i);
       doc.setFontSize(8);
       doc.setTextColor(148, 163, 184);
-      doc.text(`Gerado em ${new Date().toLocaleString('pt-BR')}  |  Página ${i} de ${pageCount}`, 105, 285, { align: 'center' });
+      doc.text(`${language === 'pt' ? 'Gerado em' : (language === 'en' ? 'Generated at' : 'Generado en')} ${new Date().toLocaleString(language === 'en' ? 'en-US' : (language === 'es' ? 'es-ES' : 'pt-BR'))}  |  ${language === 'pt' ? 'Página' : (language === 'en' ? 'Page' : 'Página')} ${i} de ${pageCount}`, 105, 285, { align: 'center' });
     }
 
     doc.save(`lista_passageiros_${transportName.toLowerCase().replace(/\s+/g, '_')}.pdf`);
@@ -720,13 +750,21 @@ export default function App() {
     if (!captain || !event) return;
 
     const fileName = generateCheckInPDF();
-    const message = `Olá ${captain.name}, aqui está a lista de check-in para o evento ${event.name}. Por favor, realize o controle de ida e volta dos passageiros.`;
+    const message = language === 'pt' 
+      ? `Olá ${captain.name}, aqui está a lista de check-in para o evento ${event.name}. Por favor, realize o controle de ida e volta dos passageiros.`
+      : (language === 'en' 
+        ? `Hi ${captain.name}, here is the check-in list for the event ${event.name}. Please track passenger outbound and return.`
+        : `Hola ${captain.name}, aquí está la lista de check-in para el evento ${event.name}. Por favor, realice el control de ida y vuelta de los pasajeros.`);
     const encodedMessage = encodeURIComponent(message);
     const phone = captain.phone.replace(/\D/g, '');
     const finalPhone = (phone.length <= 11 && !phone.startsWith('55')) ? `55${phone}` : phone;
     
     // Since we can't send the file directly via wa.me, we inform the user to send the downloaded file.
-    setSuccessMessage(`O PDF "${fileName}" foi gerado e baixado. Agora você será redirecionado para o WhatsApp do Capitão ${captain.name}. Por favor, anexe o arquivo baixado na conversa.`);
+    setSuccessMessage(language === 'pt' 
+      ? `O PDF "${fileName}" foi gerado e baixado. Agora você será redirecionado para o WhatsApp do Capitão ${captain.name}. Por favor, anexe o arquivo baixado na conversa.`
+      : (language === 'en'
+        ? `The PDF "${fileName}" was generated and downloaded. Now you will be redirected to Captain ${captain.name}'s WhatsApp. Please attach the downloaded file to the conversation.`
+        : `El PDF "${fileName}" fue generado y descargado. Ahora serás redireccionado al WhatsApp del Capitán ${captain.name}. Por favor, adjunta el archivo descargado en la conversación.`));
     setShowSuccess(true);
     setTimeout(() => {
       setShowSuccess(false);
@@ -749,7 +787,8 @@ export default function App() {
     
     const transport = transports.find(t => t.eventId === eventId);
     const pricePerPerson = transport?.pricePerPerson || 0;
-    const totalExpected = (pricePerPerson * event.days) * people.length;
+    const peopleForEvent = people; // We might want to filter people by event if they are not all for every event
+    const totalExpected = (pricePerPerson * event.days) * peopleForEvent.length;
     const remaining = totalExpected - totalCollected;
 
     const fullyPaidCount = people.filter(person => {
@@ -781,7 +820,7 @@ export default function App() {
         uid: user.uid
       };
       await setDoc(doc(db, 'events', id), eventData);
-      setSuccessMessage(editingEventId ? 'Evento atualizado com sucesso!' : 'Evento criado com sucesso!');
+      setSuccessMessage(editingEventId ? t('eventSaved') : t('eventSaved'));
       setEditingEventId(null);
       setFormData({ name: '', date: '', days: '', location: '' });
       setShowEventForm(false);
@@ -809,7 +848,7 @@ export default function App() {
         uid: user.uid
       };
       await setDoc(doc(db, 'transports', id), transportData);
-      setSuccessMessage(editingTransportId ? 'Transporte atualizado com sucesso!' : 'Transporte adicionado com sucesso!');
+      setSuccessMessage(editingTransportId ? t('transportSaved') : t('transportSaved'));
       setEditingTransportId(null);
       setTransportFormData({ eventId: '', name: '', type: '', capacity: '', pricePerPerson: '' });
       setShowTransportForm(false);
@@ -837,7 +876,7 @@ export default function App() {
         order: editingPersonId ? people.find(p => p.id === editingPersonId)?.order : people.length
       };
       await setDoc(doc(db, 'people', id), personData);
-      setSuccessMessage(editingPersonId ? 'Pessoa atualizada com sucesso!' : 'Pessoa adicionada com sucesso!');
+      setSuccessMessage(editingPersonId ? t('personSaved') : t('personSaved'));
       setEditingPersonId(null);
       setPersonFormData({ name: '', phone: '', isCaptain: false, eventId: '' });
       setShowPersonForm(false);
@@ -880,7 +919,7 @@ export default function App() {
       await Promise.all(promises);
       setImportData('');
       setShowImportModal(false);
-      setSuccessMessage(`${lines.length} pessoas importadas com sucesso!`);
+      setSuccessMessage(t('peopleImported', { count: lines.length }));
       setShowPersonSuccess(true);
       setTimeout(() => setShowPersonSuccess(false), 3000);
     } catch (error) {
@@ -902,7 +941,7 @@ export default function App() {
         uid: user.uid
       };
       await setDoc(doc(db, 'payments', id), newPayment);
-      setSuccessMessage('Pagamento registrado com sucesso!');
+      setSuccessMessage(t('paymentSaved'));
       setShowPaymentSuccess(true);
       setTimeout(() => setShowPaymentSuccess(false), 3000);
     } catch (error) {
@@ -923,7 +962,7 @@ export default function App() {
         uid: user.uid
       };
       await setDoc(doc(db, 'payments', id), newPayment);
-      setSuccessMessage('Pagamento registrado com sucesso!');
+      setSuccessMessage(t('paymentSaved'));
       setShowPaymentSuccess(true);
       setTimeout(() => setShowPaymentSuccess(false), 3000);
     } catch (error) {
@@ -1022,7 +1061,7 @@ export default function App() {
         setSelectedEventId(null);
       }
       
-      setSuccessMessage('Evento e dados relacionados excluídos com sucesso!');
+      setSuccessMessage(t('eventDeleted'));
       setShowSuccess(true);
       setTimeout(() => setShowSuccess(false), 3000);
     } catch (error) {
@@ -1040,7 +1079,7 @@ export default function App() {
         await deleteDoc(doc(db, 'seatAssignments', sa.id));
       }
 
-      setSuccessMessage('Transporte excluído com sucesso!');
+      setSuccessMessage(t('transportDeleted'));
       setShowTransportSuccess(true);
       setTimeout(() => setShowTransportSuccess(false), 3000);
     } catch (error) {
@@ -1064,7 +1103,7 @@ export default function App() {
         await deleteDoc(doc(db, 'seatAssignments', sa.id));
       }
       
-      setSuccessMessage('Passageiro e pagamentos excluídos com sucesso!');
+      setSuccessMessage(t('personDeleted'));
       setShowPersonSuccess(true);
       setTimeout(() => setShowPersonSuccess(false), 3000);
     } catch (error) {
@@ -1075,7 +1114,7 @@ export default function App() {
   const deletePayment = async (id: string) => {
     try {
       await deleteDoc(doc(db, 'payments', id));
-      setSuccessMessage('Pagamento excluído com sucesso!');
+      setSuccessMessage(t('paymentDeleted'));
       setShowPaymentSuccess(true);
       setTimeout(() => setShowPaymentSuccess(false), 3000);
     } catch (error) {
@@ -1102,14 +1141,14 @@ export default function App() {
           <div className="bg-indigo-50 w-16 h-16 rounded-2xl flex items-center justify-center mx-auto mb-6">
             <Calendar className="w-8 h-8 text-indigo-600" />
           </div>
-          <h1 className="text-2xl font-bold text-zinc-900 mb-2">Gestor de Eventos</h1>
-          <p className="text-zinc-500 mb-8">Faça login para salvar seus eventos na nuvem e acessá-los de qualquer lugar.</p>
+          <h1 className="text-2xl font-bold text-zinc-900 mb-2">{t('appTitle')}</h1>
+          <p className="text-zinc-500 mb-8">{t('logout') === 'Sair' ? 'Faça login para salvar seus eventos na nuvem e acessá-los de qualquer lugar.' : (language === 'en' ? 'Log in to save your events in the cloud and access them from anywhere.' : 'Inicia sesión para guardar tus eventos en la nube y acceder a ellos desde cualquier lugar.')}</p>
           <button
             onClick={handleLogin}
             className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-4 rounded-2xl shadow-lg shadow-indigo-100 transition-all active:scale-95 flex items-center justify-center gap-3"
           >
             <img src="https://www.gstatic.com/firebase/anonymous-scan.png" alt="Google" className="w-6 h-6 hidden" />
-            Entrar com Google
+            {language === 'pt' ? 'Entrar com Google' : (language === 'en' ? 'Sign in with Google' : 'Entrar con Google')}
           </button>
         </motion.div>
       </div>
@@ -1123,7 +1162,7 @@ export default function App() {
         <div className="max-w-3xl mx-auto px-4 py-6 flex flex-col md:flex-row items-center justify-between gap-4">
           <h1 className="text-2xl font-bold tracking-tight text-zinc-900 flex items-center gap-2">
             <Calendar className="w-6 h-6 text-indigo-600" />
-            Gestor de Eventos
+            {t('appTitle')}
           </h1>
           <div className="flex items-center gap-3">
           <div className="flex bg-zinc-100 p-1 rounded-xl overflow-x-auto max-w-full no-scrollbar shadow-inner">
@@ -1139,21 +1178,21 @@ export default function App() {
               }`}
             >
               <Calendar className="w-4 h-4" />
-              Eventos
+              {t('events')}
             </button>
           </div>
             <div className="flex items-center gap-2">
               <button
                 onClick={() => setShowSettingsModal(true)}
                 className="p-2.5 text-zinc-500 hover:text-indigo-600 hover:bg-indigo-50 rounded-xl border border-zinc-200 hover:border-indigo-200 transition-all active:scale-95 shadow-sm bg-white"
-                title="Configurações de Pagamento"
+                title={t('settings')}
               >
                 <Settings className="w-5 h-5" />
               </button>
               <button
                 onClick={handleLogout}
                 className="p-2.5 text-zinc-500 hover:text-red-600 hover:bg-red-50 rounded-xl border border-zinc-200 hover:border-red-200 transition-all active:scale-95 shadow-sm bg-white"
-                title="Sair"
+                title={t('logout')}
               >
                 <LogOut className="w-5 h-5" />
               </button>
@@ -1196,7 +1235,7 @@ export default function App() {
                       >
                         <div className="p-5 sm:p-6 border-b border-zinc-100 flex items-center justify-between bg-zinc-50/50">
                           <h2 className="text-lg sm:text-xl font-bold text-zinc-900">
-                            {editingEventId ? 'Editar Evento' : 'Novo Evento'}
+                            {editingEventId ? t('editEvent') : t('newEvent')}
                           </h2>
                           <button
                             onClick={() => {
@@ -1213,7 +1252,7 @@ export default function App() {
                         <form onSubmit={handleSubmit} className="p-5 sm:p-6 space-y-6">
                           <div>
                             <label htmlFor="name" className="block text-sm font-medium text-zinc-700 mb-1">
-                              Nome do Evento
+                              {t('eventName')}
                             </label>
                             <input
                               type="text"
@@ -1221,7 +1260,7 @@ export default function App() {
                               required
                               value={formData.name}
                               onChange={e => setFormData(prev => ({ ...prev, name: e.target.value }))}
-                              placeholder="Ex: Conferência de Tecnologia"
+                              placeholder={language === 'pt' ? "Ex: Conferência de Tecnologia" : (language === 'en' ? "Ex: Tech Conference" : "Ej: Conferencia de Tecnología")}
                               className="w-full px-4 py-2.5 bg-zinc-50 border border-zinc-200 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none transition-all"
                             />
                           </div>
@@ -1229,7 +1268,7 @@ export default function App() {
                           <div className="grid grid-cols-2 gap-4">
                             <div>
                               <label htmlFor="date" className="block text-sm font-medium text-zinc-700 mb-1">
-                                Data
+                                {t('date')}
                               </label>
                               <input
                                 type="date"
@@ -1242,7 +1281,7 @@ export default function App() {
                             </div>
                             <div>
                               <label htmlFor="days" className="block text-sm font-medium text-zinc-700 mb-1">
-                                Dias
+                                {t('days')}
                               </label>
                               <input
                                 type="number"
@@ -1259,7 +1298,7 @@ export default function App() {
 
                           <div>
                             <label htmlFor="location" className="block text-sm font-medium text-zinc-700 mb-1">
-                              Local
+                              {t('location')}
                             </label>
                             <div className="relative">
                               <MapPin className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-400" />
@@ -1269,7 +1308,7 @@ export default function App() {
                                 required
                                 value={formData.location}
                                 onChange={e => setFormData(prev => ({ ...prev, location: e.target.value }))}
-                                placeholder="Cidade, Estado ou Endereço"
+                                placeholder={language === 'pt' ? "Cidade, Estado ou Endereço" : (language === 'en' ? "City, State or Address" : "Ciudad, Estado o Dirección")}
                                 className="w-full pl-10 pr-4 py-2.5 bg-zinc-50 border border-zinc-200 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none transition-all"
                               />
                             </div>
@@ -1280,7 +1319,7 @@ export default function App() {
                             className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-semibold py-3.5 rounded-2xl shadow-lg shadow-indigo-200 transition-all flex items-center justify-center gap-2 active:scale-[0.98]"
                           >
                             {editingEventId ? <Edit2 className="w-5 h-5" /> : <Plus className="w-5 h-5" />}
-                            {editingEventId ? 'Salvar Alterações' : 'Cadastrar Evento'}
+                            {editingEventId ? t('save') : (language === 'pt' ? 'Cadastrar Evento' : (language === 'en' ? 'Register Event' : 'Registrar Evento'))}
                           </button>
                         </form>
                       </motion.div>
@@ -1291,7 +1330,7 @@ export default function App() {
                 {/* Event List */}
                 <div className="space-y-4">
                   <div className="flex items-center justify-between px-1">
-                    <h3 className="text-lg font-semibold text-zinc-900">Seus Eventos</h3>
+                    <h3 className="text-lg font-semibold text-zinc-900">{t('events')}</h3>
                     <AnimatePresence>
                       {showSuccess && (
                         <motion.div
@@ -1309,7 +1348,7 @@ export default function App() {
                   {events.length === 0 ? (
                     <div className="text-center py-12 bg-white rounded-2xl border border-dashed border-zinc-300">
                       <List className="w-10 h-10 text-zinc-300 mx-auto mb-3" />
-                      <p className="text-zinc-500 text-sm">Nenhum evento cadastrado.</p>
+                      <p className="text-zinc-500 text-sm">{t('noEvents')}</p>
                     </div>
                   ) : (
                     <div className="grid gap-4">
@@ -1331,7 +1370,7 @@ export default function App() {
                               <div className="flex flex-wrap gap-x-3 gap-y-1 mt-1 text-xs text-zinc-500">
                                 <span className="flex items-center gap-1">
                                   <Calendar className="w-3.5 h-3.5" />
-                                  {new Date(event.date).toLocaleDateString('pt-BR')} ({event.days} {event.days === 1 ? 'dia' : 'dias'})
+                                  {new Date(event.date).toLocaleDateString(language === 'en' ? 'en-US' : (language === 'es' ? 'es-ES' : 'pt-BR'))} ({event.days} {event.days === 1 ? t('day') : t('days')})
                                 </span>
                                 <span className="flex items-center gap-1 truncate max-w-[150px]">
                                   <MapPin className="w-3.5 h-3.5" />
@@ -1341,32 +1380,32 @@ export default function App() {
                             </div>
                           </div>
                           <div className="flex gap-1" onClick={e => e.stopPropagation()}>
-                            <button
-                              onClick={() => startEditEvent(event)}
-                              className="p-2 text-zinc-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-all active:scale-90"
-                              title="Editar Evento"
-                            >
-                              <Edit2 className="w-4 h-4" />
-                            </button>
-                            <button
-                              onClick={() => {
-                                setConfirmModal({
-                                  show: true,
-                                  title: 'Excluir Evento',
-                                  message: 'Tem certeza que deseja excluir este evento? Todos os dados relacionados (transportes, passageiros e pagamentos) também serão excluídos.',
-                                  confirmText: 'Excluir',
-                                  variant: 'danger',
-                                  onConfirm: () => {
-                                    deleteEvent(event.id);
-                                    setConfirmModal(prev => ({ ...prev, show: false }));
-                                  }
-                                });
-                              }}
-                              className="p-2 text-zinc-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-all active:scale-90"
-                              title="Excluir Evento"
-                            >
-                              <Trash2 className="w-4 h-4" />
-                            </button>
+                             <button
+                               onClick={() => startEditEvent(event)}
+                               className="p-2 text-zinc-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-all active:scale-90"
+                               title={t('editEvent')}
+                             >
+                               <Edit2 className="w-4 h-4" />
+                             </button>
+                             <button
+                               onClick={() => {
+                                 setConfirmModal({
+                                   show: true,
+                                   title: t('deleteEvent'),
+                                   message: t('deleteEventMsg'),
+                                   confirmText: t('remove'),
+                                   variant: 'danger',
+                                   onConfirm: () => {
+                                     deleteEvent(event.id);
+                                     setConfirmModal(prev => ({ ...prev, show: false }));
+                                   }
+                                 });
+                               }}
+                               className="p-2 text-zinc-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-all active:scale-90"
+                               title={t('deleteEvent')}
+                             >
+                               <Trash2 className="w-4 h-4" />
+                             </button>
                           </div>
                         </motion.div>
                       ))}
@@ -1384,48 +1423,48 @@ export default function App() {
               >
                 {/* Dashboard Header */}
                 <div className="flex items-center justify-between">
-                  <button
-                    onClick={() => setSelectedEventId(null)}
-                    className="flex items-center gap-2 text-zinc-500 hover:text-indigo-600 font-bold text-sm transition-all active:scale-95 px-2 py-1 rounded-lg hover:bg-indigo-50"
-                  >
-                    <Plus className="w-4 h-4 rotate-45" />
-                    Voltar
-                  </button>
-                  <div className="flex bg-zinc-100 p-1 rounded-xl overflow-x-auto max-w-[200px] sm:max-w-full no-scrollbar shadow-inner">
                     <button
-                      onClick={() => setEventViewTab('transport')}
-                      className={`flex items-center gap-2.5 px-4 py-2.5 rounded-lg text-xs font-bold uppercase tracking-wider transition-all whitespace-nowrap active:scale-95 ${
-                        eventViewTab === 'transport' 
-                        ? 'bg-white text-indigo-600 shadow-sm' 
-                        : 'text-zinc-500 hover:text-zinc-700'
-                      }`}
-                    >
-                      <Bus className="w-4 h-4" />
-                      Transporte
-                    </button>
-                    <button
-                      onClick={() => setEventViewTab('people')}
-                      className={`flex items-center gap-2.5 px-4 py-2.5 rounded-lg text-xs font-bold uppercase tracking-wider transition-all whitespace-nowrap active:scale-95 ${
-                        eventViewTab === 'people' 
-                        ? 'bg-white text-indigo-600 shadow-sm' 
-                        : 'text-zinc-500 hover:text-zinc-700'
-                      }`}
-                    >
-                      <Users className="w-4 h-4" />
-                      Pessoas
-                    </button>
-                    <button
-                      onClick={() => setEventViewTab('payments')}
-                      className={`flex items-center gap-2.5 px-4 py-2.5 rounded-lg text-xs font-bold uppercase tracking-wider transition-all whitespace-nowrap active:scale-95 ${
-                        eventViewTab === 'payments' 
-                        ? 'bg-white text-indigo-600 shadow-sm' 
-                        : 'text-zinc-500 hover:text-zinc-700'
-                      }`}
-                    >
-                      <DollarSign className="w-4 h-4" />
-                      Pagamentos
-                    </button>
-                  </div>
+                     onClick={() => setSelectedEventId(null)}
+                     className="flex items-center gap-2 text-zinc-500 hover:text-indigo-600 font-bold text-sm transition-all active:scale-95 px-2 py-1 rounded-lg hover:bg-indigo-50"
+                   >
+                     <Plus className="w-4 h-4 rotate-45" />
+                     {t('back')}
+                   </button>
+                   <div className="flex bg-zinc-100 p-1 rounded-xl overflow-x-auto max-w-[200px] sm:max-w-full no-scrollbar shadow-inner">
+                     <button
+                       onClick={() => setEventViewTab('transport')}
+                       className={`flex items-center gap-2.5 px-4 py-2.5 rounded-lg text-xs font-bold uppercase tracking-wider transition-all whitespace-nowrap active:scale-95 ${
+                         eventViewTab === 'transport' 
+                         ? 'bg-white text-indigo-600 shadow-sm' 
+                         : 'text-zinc-500 hover:text-zinc-700'
+                       }`}
+                     >
+                       <Bus className="w-4 h-4" />
+                       {t('transport')}
+                     </button>
+                     <button
+                       onClick={() => setEventViewTab('people')}
+                       className={`flex items-center gap-2.5 px-4 py-2.5 rounded-lg text-xs font-bold uppercase tracking-wider transition-all whitespace-nowrap active:scale-95 ${
+                         eventViewTab === 'people' 
+                         ? 'bg-white text-indigo-600 shadow-sm' 
+                         : 'text-zinc-500 hover:text-zinc-700'
+                       }`}
+                     >
+                       <Users className="w-4 h-4" />
+                       {t('people')}
+                     </button>
+                     <button
+                       onClick={() => setEventViewTab('payments')}
+                       className={`flex items-center gap-2.5 px-4 py-2.5 rounded-lg text-xs font-bold uppercase tracking-wider transition-all whitespace-nowrap active:scale-95 ${
+                         eventViewTab === 'payments' 
+                         ? 'bg-white text-indigo-600 shadow-sm' 
+                         : 'text-zinc-500 hover:text-zinc-700'
+                       }`}
+                     >
+                       <DollarSign className="w-4 h-4" />
+                       {t('payments')}
+                     </button>
+                   </div>
                 </div>
 
                 {/* Event Info Card */}
@@ -1437,8 +1476,8 @@ export default function App() {
                         <div className="flex flex-wrap gap-x-4 gap-y-1.5 mt-1.5 text-xs md:text-sm text-zinc-500">
                           <span className="flex items-center gap-1.5">
                             <Calendar className="w-4 h-4" />
-                            {new Date(events.find(e => e.id === selectedEventId)!.date).toLocaleDateString('pt-BR')}
-                            <span className="text-zinc-400 font-medium">({events.find(e => e.id === selectedEventId)?.days} {events.find(e => e.id === selectedEventId)?.days === 1 ? 'dia' : 'dias'})</span>
+                            {new Date(events.find(e => e.id === selectedEventId)!.date).toLocaleDateString(language === 'en' ? 'en-US' : (language === 'es' ? 'es-ES' : 'pt-BR'))}
+                            <span className="text-zinc-400 font-medium">({events.find(e => e.id === selectedEventId)?.days} {events.find(e => e.id === selectedEventId)?.days === 1 ? t('day') : t('days')})</span>
                           </span>
                           <span className="flex items-center gap-1.5">
                             <MapPin className="w-4 h-4" />
@@ -1455,19 +1494,19 @@ export default function App() {
                           <div className="bg-zinc-50 p-2 md:p-4 rounded-xl border border-zinc-100">
                             <p className="text-[8px] md:text-[10px] font-bold text-zinc-500 uppercase tracking-wider mb-0.5">Total</p>
                             <p className="text-xs md:text-lg font-bold text-zinc-900">
-                              R$ {getEventSummary(selectedEventId!)?.totalExpected.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                              {language === 'pt' ? 'R$' : (language === 'en' ? '$' : '€')} {getEventSummary(selectedEventId!)?.totalExpected.toLocaleString(language === 'en' ? 'en-US' : (language === 'es' ? 'es-ES' : 'pt-BR'), { minimumFractionDigits: 2 })}
                             </p>
                           </div>
                           <div className="bg-emerald-50 p-2 md:p-4 rounded-xl border border-emerald-100">
-                            <p className="text-[8px] md:text-[10px] font-bold text-emerald-600 uppercase tracking-wider mb-0.5">Pago</p>
+                            <p className="text-[8px] md:text-[10px] font-bold text-emerald-600 uppercase tracking-wider mb-0.5">{t('paid')}</p>
                             <p className="text-xs md:text-lg font-bold text-emerald-900">
-                              R$ {getEventSummary(selectedEventId!)?.totalCollected.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                              {language === 'pt' ? 'R$' : (language === 'en' ? '$' : '€')} {getEventSummary(selectedEventId!)?.totalCollected.toLocaleString(language === 'en' ? 'en-US' : (language === 'es' ? 'es-ES' : 'pt-BR'), { minimumFractionDigits: 2 })}
                             </p>
                           </div>
                           <div className="bg-amber-50 p-2 md:p-4 rounded-xl border border-amber-100">
-                            <p className="text-[8px] md:text-[10px] font-bold text-amber-600 uppercase tracking-wider mb-0.5">Falta</p>
+                            <p className="text-[8px] md:text-[10px] font-bold text-amber-600 uppercase tracking-wider mb-0.5">{t('pending')}</p>
                             <p className="text-xs md:text-lg font-bold text-amber-900">
-                              R$ {getEventSummary(selectedEventId!)?.remaining.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                              {language === 'pt' ? 'R$' : (language === 'en' ? '$' : '€')} {getEventSummary(selectedEventId!)?.remaining.toLocaleString(language === 'en' ? 'en-US' : (language === 'es' ? 'es-ES' : 'pt-BR'), { minimumFractionDigits: 2 })}
                             </p>
                           </div>
                         </div>
@@ -1504,10 +1543,10 @@ export default function App() {
                                 className="relative w-full max-w-md bg-white rounded-3xl shadow-2xl border border-zinc-200 overflow-hidden"
                               >
                                 <div className="p-6 border-b border-zinc-100 flex items-center justify-between bg-zinc-50/50">
-                                  <h3 className="text-lg font-bold text-zinc-900 flex items-center gap-2">
-                                    <Bus className="w-5 h-5 text-indigo-600" />
-                                    {editingTransportId ? 'Editar Transporte' : 'Novo Transporte'}
-                                  </h3>
+                                   <h3 className="text-lg font-bold text-zinc-900 flex items-center gap-2">
+                                     <Bus className="w-5 h-5 text-indigo-600" />
+                                     {editingTransportId ? t('editEvent') : t('addTransport')}
+                                   </h3>
                                   <button
                                     onClick={() => {
                                       setShowTransportForm(false);
@@ -1523,31 +1562,31 @@ export default function App() {
                                 <form onSubmit={handleTransportSubmit} className="p-6 space-y-5">
                                   <input type="hidden" value={selectedEventId || ''} />
                                   <div>
-                                    <label htmlFor="name" className="block text-sm font-medium text-zinc-700 mb-1">Nome do Veículo (Opcional)</label>
+                                    <label htmlFor="name" className="block text-sm font-medium text-zinc-700 mb-1">{language === 'pt' ? 'Nome do Veículo (Opcional)' : (language === 'en' ? 'Vehicle Name (Optional)' : 'Nombre del Vehículo (Opcional)')}</label>
                                     <input
                                       type="text"
                                       id="name"
                                       value={transportFormData.name}
                                       onChange={e => setTransportFormData(prev => ({ ...prev, name: e.target.value, eventId: selectedEventId! }))}
-                                      placeholder="Ex: Ônibus 1, Van Executiva"
+                                      placeholder={language === 'pt' ? "Ex: Ônibus 1, Van Executiva" : (language === 'en' ? "Ex: Bus 1, Executive Van" : "Ej: Autobús 1, Van Ejecutiva")}
                                       className="w-full px-4 py-2.5 bg-zinc-50 border border-zinc-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
                                     />
                                   </div>
                                   <div>
-                                    <label htmlFor="type" className="block text-sm font-medium text-zinc-700 mb-1">Tipo</label>
+                                    <label htmlFor="type" className="block text-sm font-medium text-zinc-700 mb-1">{language === 'pt' ? 'Tipo' : (language === 'en' ? 'Type' : 'Tipo')}</label>
                                     <input
                                       type="text"
                                       id="type"
                                       required
                                       value={transportFormData.type}
                                       onChange={e => setTransportFormData(prev => ({ ...prev, type: e.target.value, eventId: selectedEventId! }))}
-                                      placeholder="Ex: Ônibus, Van"
+                                      placeholder={language === 'pt' ? "Ex: Ônibus, Van" : (language === 'en' ? "Ex: Bus, Van" : "Ej: Autobús, Van")}
                                       className="w-full px-4 py-2.5 bg-zinc-50 border border-zinc-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
                                     />
                                   </div>
                                   <div className="grid grid-cols-2 gap-4">
                                     <div>
-                                      <label className="block text-sm font-medium text-zinc-700 mb-1">Capacidade</label>
+                                      <label className="block text-sm font-medium text-zinc-700 mb-1">{t('capacity')}</label>
                                       <input
                                         type="number"
                                         required
@@ -1557,7 +1596,7 @@ export default function App() {
                                       />
                                     </div>
                                     <div>
-                                      <label className="block text-sm font-medium text-zinc-700 mb-1">Preço/Pessoa</label>
+                                      <label className="block text-sm font-medium text-zinc-700 mb-1">{t('pricePerPerson')}</label>
                                       <input
                                         type="number"
                                         required
@@ -1569,7 +1608,7 @@ export default function App() {
                                     </div>
                                   </div>
                                   <button type="submit" className="w-full bg-indigo-600 text-white font-bold py-3.5 rounded-2xl shadow-lg shadow-indigo-200 hover:bg-indigo-700 transition-all active:scale-[0.98]">
-                                    {editingTransportId ? 'Salvar Alterações' : 'Adicionar Transporte'}
+                                    {editingTransportId ? t('save') : t('addTransport')}
                                   </button>
                                 </form>
                               </motion.div>
@@ -1578,7 +1617,7 @@ export default function App() {
                         </AnimatePresence>
 
                         <div className="flex items-center justify-between px-1">
-                          <h3 className="text-lg font-semibold text-zinc-900">Transportes do Evento</h3>
+                          <h3 className="text-lg font-semibold text-zinc-900">{language === 'pt' ? 'Transportes do Evento' : (language === 'en' ? 'Event Transports' : 'Transportes del Evento')}</h3>
                           <AnimatePresence>
                             {showTransportSuccess && (
                               <motion.div
@@ -1604,7 +1643,7 @@ export default function App() {
                                 <h4 className="font-bold text-zinc-900 text-sm md:text-base truncate">{transport.name || transport.type}</h4>
                                 <p className="text-xs md:text-sm text-zinc-500 truncate">
                                   {transport.name ? transport.type + ' • ' : ''}
-                                  {transport.capacity} pessoas • R$ {transport.pricePerPerson.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}/pessoa
+                                   {transport.capacity} {language === 'pt' ? 'pessoas' : (language === 'en' ? 'people' : 'personas')} • {language === 'pt' ? 'R$' : (language === 'en' ? '$' : '€')} {transport.pricePerPerson.toLocaleString(language === 'en' ? 'en-US' : (language === 'es' ? 'es-ES' : 'pt-BR'), { minimumFractionDigits: 2 })}/{language === 'pt' ? 'pessoa' : (language === 'en' ? 'person' : 'persona')}
                                 </p>
                               </div>
                             </div>
@@ -1664,7 +1703,7 @@ export default function App() {
                   {eventViewTab === 'people' && (
                     <div className="space-y-6">
                       <div className="flex items-center justify-between px-1">
-                        <h3 className="text-lg font-semibold text-zinc-900">Passageiros do Evento</h3>
+                        <h3 className="text-lg font-semibold text-zinc-900">{t('passengers')}</h3>
                         <div className="flex flex-col sm:flex-row gap-2">
                           <button
                             onClick={() => setShowImportModal(true)}
@@ -1682,7 +1721,7 @@ export default function App() {
                             className="flex items-center justify-center gap-2 px-4 py-2.5 bg-indigo-600 text-white rounded-xl hover:bg-indigo-700 transition-all text-xs font-bold shadow-lg shadow-indigo-100 w-full sm:w-auto active:scale-95"
                           >
                             <Plus className="w-4 h-4" />
-                            Novo Passageiro
+                            {t('addPerson')}
                           </button>
                         </div>
                       </div>
@@ -1690,7 +1729,7 @@ export default function App() {
                       {people.length === 0 ? (
                         <div className="text-center py-12 bg-white rounded-2xl border border-dashed border-zinc-300">
                           <Users className="w-10 h-10 text-zinc-300 mx-auto mb-3" />
-                          <p className="text-zinc-500 text-sm">Nenhuma pessoa cadastrada para este evento.</p>
+                          <p className="text-zinc-500 text-sm">{language === 'pt' ? 'Nenhuma pessoa cadastrada para este evento.' : (language === 'en' ? 'No people registered for this event.' : 'No hay personas registradas para este evento.')}</p>
                         </div>
                       ) : (
                         <div className="grid gap-4">
@@ -1712,7 +1751,7 @@ export default function App() {
                                     {person.isCaptain && (
                                       <span className="bg-indigo-100 text-indigo-700 text-[10px] md:text-[11px] font-black uppercase px-2 py-0.5 rounded-md flex items-center gap-1 shrink-0">
                                         <Shield className="w-2.5 h-2.5 md:w-3 h-3" />
-                                        Capitão
+                                        {t('captain')}
                                       </span>
                                     )}
                                   </div>
@@ -1800,76 +1839,76 @@ export default function App() {
                               <div className="p-6 space-y-5">
                                 <div>
                                   <label className="block text-sm font-medium text-zinc-700 mb-1">Passageiro</label>
-                                  <select
-                                    required
-                                    value={paymentFormData.personId}
-                                    onChange={e => setPaymentFormData(prev => ({ ...prev, personId: e.target.value, eventId: selectedEventId! }))}
-                                    className="w-full px-4 py-2.5 bg-zinc-50 border border-zinc-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
-                                  >
-                                    <option value="">Selecione...</option>
-                                    {people.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
-                                  </select>
-                                </div>
-                                
-                                {paymentFormData.personId && (
-                                  <div className="space-y-4">
-                                    <p className="text-sm font-medium text-zinc-700">Registrar Pagamento por Dia:</p>
-                                    <div className="grid grid-cols-2 gap-3">
-                                      {Array.from({ length: events.find(e => e.id === selectedEventId)?.days || 0 }).map((_, i) => {
-                                        const event = events.find(e => e.id === selectedEventId);
-                                        const transport = transports.find(t => t.eventId === selectedEventId);
-                                        const amount = transport?.pricePerPerson || 0;
-                                        
-                                        const personPayments = payments.filter(p => p.eventId === selectedEventId && p.personId === paymentFormData.personId);
-                                        const isPaid = personPayments.length > i;
-
-                                        return (
-                                          <button
-                                            key={i}
-                                            onClick={() => registerPayment(amount)}
-                                            disabled={isPaid}
-                                            className={`flex flex-col items-center justify-center p-3 rounded-xl border transition-all ${
-                                              isPaid 
-                                                ? 'bg-emerald-50 border-emerald-200 text-emerald-600 cursor-default' 
-                                                : 'bg-white border-zinc-200 text-zinc-700 hover:border-indigo-300 hover:bg-indigo-50 active:scale-95'
-                                            }`}
-                                          >
-                                            <span className="text-[10px] font-bold uppercase tracking-wider mb-1">Dia {i + 1}</span>
-                                            <span className="font-bold">R$ {amount.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</span>
-                                            {isPaid && <CheckCircle2 className="w-4 h-4 mt-1" />}
-                                          </button>
-                                        );
-                                      })}
-                                    </div>
-                                    
-                                    <button 
-                                      onClick={() => {
-                                        const event = events.find(e => e.id === selectedEventId);
-                                        const transport = transports.find(t => t.eventId === selectedEventId);
-                                        if (!event || !transport) return;
-                                        const personPayments = payments.filter(p => p.eventId === selectedEventId && p.personId === paymentFormData.personId);
-                                        const remainingDays = event.days - personPayments.length;
-                                        if (remainingDays > 0) {
-                                          for (let j = 0; j < remainingDays; j++) {
-                                            registerPayment(transport.pricePerPerson);
-                                          }
-                                        }
-                                      }}
-                                      className="w-full py-3.5 px-4 bg-zinc-900 text-white rounded-2xl font-bold text-sm hover:bg-zinc-800 transition-all flex items-center justify-center gap-2 shadow-lg shadow-zinc-200"
+                                    <select
+                                      required
+                                      value={paymentFormData.personId}
+                                      onChange={e => setPaymentFormData(prev => ({ ...prev, personId: e.target.value, eventId: selectedEventId! }))}
+                                      className="w-full px-4 py-2.5 bg-zinc-50 border border-zinc-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
                                     >
-                                      Pagar Todos os Dias
-                                    </button>
+                                      <option value="">{t('selectPassenger')}</option>
+                                      {people.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                                    </select>
                                   </div>
-                                )}
-                              </div>
-                            </motion.div>
-                          </div>
-                        )}
-                      </AnimatePresence>
+                                  
+                                  {paymentFormData.personId && (
+                                    <div className="space-y-4">
+                                      <p className="text-sm font-medium text-zinc-700">{language === 'pt' ? 'Registrar Pagamento por Dia:' : (language === 'en' ? 'Register Payment by Day:' : 'Registrar Pago por Día:')}</p>
+                                      <div className="grid grid-cols-2 gap-3">
+                                        {Array.from({ length: events.find(e => e.id === selectedEventId)?.days || 0 }).map((_, i) => {
+                                          const event = events.find(e => e.id === selectedEventId);
+                                          const transport = transports.find(t => t.eventId === selectedEventId);
+                                          const amount = transport?.pricePerPerson || 0;
+                                          
+                                          const personPayments = payments.filter(p => p.eventId === selectedEventId && p.personId === paymentFormData.personId);
+                                          const isPaid = personPayments.length > i;
+ 
+                                          return (
+                                            <button
+                                              key={i}
+                                              onClick={() => registerPayment(amount)}
+                                              disabled={isPaid}
+                                              className={`flex flex-col items-center justify-center p-3 rounded-xl border transition-all ${
+                                                isPaid 
+                                                  ? 'bg-emerald-50 border-emerald-200 text-emerald-600 cursor-default' 
+                                                  : 'bg-white border-zinc-200 text-zinc-700 hover:border-indigo-300 hover:bg-indigo-50 active:scale-95'
+                                              }`}
+                                            >
+                                  <span className="text-[10px] font-bold uppercase tracking-wider mb-1">{language === 'pt' ? 'Dia' : (language === 'en' ? 'Day' : 'Día')} {i + 1}</span>
+                                  <span className="font-bold">{language === 'pt' ? 'R$' : (language === 'en' ? '$' : '€')} {amount.toLocaleString(language === 'en' ? 'en-US' : (language === 'es' ? 'es-ES' : 'pt-BR'), { minimumFractionDigits: 2 })}</span>
+                                  {isPaid && <CheckCircle2 className="w-4 h-4 mt-1" />}
+                                </button>
+                                          );
+                                        })}
+                                      </div>
+                                      
+                                      <button 
+                                        onClick={() => {
+                                          const event = events.find(e => e.id === selectedEventId);
+                                          const transport = transports.find(t => t.eventId === selectedEventId);
+                                          if (!event || !transport) return;
+                                          const personPayments = payments.filter(p => p.eventId === selectedEventId && p.personId === paymentFormData.personId);
+                                          const remainingDays = event.days - personPayments.length;
+                                          if (remainingDays > 0) {
+                                            for (let j = 0; j < remainingDays; j++) {
+                                              registerPayment(transport.pricePerPerson);
+                                            }
+                                          }
+                                        }}
+                                        className="w-full py-3.5 px-4 bg-zinc-900 text-white rounded-2xl font-bold text-sm hover:bg-zinc-800 transition-all flex items-center justify-center gap-2 shadow-lg shadow-zinc-200"
+                                      >
+                                        {language === 'pt' ? 'Pagar Todos os Dias' : (language === 'en' ? 'Pay All Days' : 'Pagar Todos los Días')}
+                                      </button>
+                                    </div>
+                                  )}
+                                </div>
+                              </motion.div>
+                            </div>
+                          )}
+                        </AnimatePresence>
 
                         <div className="space-y-8">
                           <div className="flex items-center justify-between px-1">
-                            <h3 className="text-lg font-semibold text-zinc-900">Controle de Pagamentos</h3>
+                            <h3 className="text-lg font-semibold text-zinc-900">{t('paymentControl')}</h3>
                             <AnimatePresence>
                               {showPaymentSuccess && (
                                 <motion.div
@@ -1887,7 +1926,7 @@ export default function App() {
                           {/* Summary by Person */}
                         <div className="grid gap-4">
                           <div className="flex items-center justify-between px-1">
-                            <h4 className="text-sm font-bold text-zinc-500 uppercase tracking-wider">Resumo por Pessoa</h4>
+                            <h4 className="text-sm font-bold text-zinc-500 uppercase tracking-wider">{language === 'pt' ? 'Resumo por Pessoa' : (language === 'en' ? 'Summary by Person' : 'Resumen por Persona')}</h4>
                             <div className="flex bg-zinc-100 p-1 rounded-lg">
                               <button
                                 onClick={() => setPaymentStatusFilter('all')}
@@ -1895,7 +1934,7 @@ export default function App() {
                                   paymentStatusFilter === 'all' ? 'bg-white text-zinc-900 shadow-sm' : 'text-zinc-500'
                                 }`}
                               >
-                                Todos ({people.length})
+                                {language === 'pt' ? 'Todos' : (language === 'en' ? 'All' : 'Todos')} ({people.length})
                               </button>
                               <button
                                 onClick={() => setPaymentStatusFilter('paid')}
@@ -1903,7 +1942,7 @@ export default function App() {
                                   paymentStatusFilter === 'paid' ? 'bg-white text-emerald-600 shadow-sm' : 'text-zinc-500'
                                 }`}
                               >
-                                Pagos ({people.filter(person => {
+                                {t('paid')} ({people.filter(person => {
                                   const totalPaid = getTotalPaidByPersonForEvent(person.id, selectedEventId!);
                                   const event = events.find(e => e.id === selectedEventId);
                                   const transport = transports.find(t => t.eventId === selectedEventId);
@@ -1918,7 +1957,7 @@ export default function App() {
                                   paymentStatusFilter === 'pending' ? 'bg-white text-amber-600 shadow-sm' : 'text-zinc-500'
                                 }`}
                               >
-                                Pendentes ({people.filter(person => {
+                                {t('pending')} ({people.filter(person => {
                                   const totalPaid = getTotalPaidByPersonForEvent(person.id, selectedEventId!);
                                   const event = events.find(e => e.id === selectedEventId);
                                   const transport = transports.find(t => t.eventId === selectedEventId);
@@ -1957,15 +1996,16 @@ export default function App() {
                                       {person.isCaptain && (
                                         <span className="bg-indigo-100 text-indigo-700 text-[10px] md:text-[11px] font-black uppercase px-2 py-0.5 rounded-md flex items-center gap-1 shrink-0">
                                           <Shield className="w-2.5 h-2.5 md:w-3 h-3" />
-                                          Capitão
-                                        </span>
+                                        <Shield className="w-2.5 h-2.5 md:w-3 h-3" />
+                                        {t('captain')}
+                                      </span>
                                       )}
                                     </div>
                                   <div className="flex flex-col items-end gap-2 shrink-0">
                                     <span className={`px-2.5 py-1 md:px-3 md:py-1 rounded-full text-[10px] md:text-[11px] font-bold uppercase tracking-wider ${
                                       isFullyPaid ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'
                                     }`}>
-                                      {isFullyPaid ? 'Pago' : 'Pendente'}
+                                      {isFullyPaid ? t('paid') : t('pending')}
                                     </span>
                                     {!isFullyPaid && (
                                       <div className="flex gap-2">
@@ -1973,9 +2013,12 @@ export default function App() {
                                           onClick={() => {
                                             setConfirmModal({
                                               show: true,
-                                              title: 'Confirmar Pagamento',
-                                              message: `Deseja registrar o pagamento total de R$ ${(price - totalPaid).toLocaleString('pt-BR', { minimumFractionDigits: 2 })} para ${person.name}?`,
-                                              confirmText: 'Pago',
+                                              title: t('confirmPayment'),
+                                              message: t('confirmPaymentMsg', { 
+                                                amount: (price - totalPaid).toLocaleString(language === 'en' ? 'en-US' : (language === 'es' ? 'es-ES' : 'pt-BR'), { minimumFractionDigits: 2 }),
+                                                name: person.name 
+                                              }),
+                                              confirmText: language === 'pt' ? 'Pago' : (language === 'en' ? 'Paid' : 'Pagado'),
                                               variant: 'success',
                                               onConfirm: () => {
                                                 handleQuickPayment(person.id, price - totalPaid);
@@ -1984,17 +2027,17 @@ export default function App() {
                                             });
                                           }}
                                           className="flex items-center gap-1.5 px-3 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-[10px] md:text-[11px] font-bold uppercase tracking-wider transition-all active:scale-95 shadow-lg shadow-indigo-100"
-                                          title="Informar pagamento total"
+                                          title={language === 'pt' ? 'Informar pagamento total' : (language === 'en' ? 'Report full payment' : 'Informar pago total')}
                                         >
                                           <DollarSign className="w-3.5 h-3.5 md:w-4 h-4" />
-                                          Pagar
+                                          {language === 'pt' ? 'Pagar' : (language === 'en' ? 'Pay' : 'Pagar')}
                                         </button>
                                         <button
                                           onClick={() => handleWhatsAppClick(person, price - totalPaid)}
                                           className="flex items-center gap-1.5 px-3 py-2 bg-emerald-500 hover:bg-emerald-600 text-white rounded-xl text-[10px] md:text-[11px] font-bold uppercase tracking-wider transition-all active:scale-95 shadow-lg shadow-emerald-100"
                                         >
                                           <MessageCircle className="w-3.5 h-3.5 md:w-4 h-4" />
-                                          Cobrar
+                                          {language === 'pt' ? 'Cobrar' : (language === 'en' ? 'Charge' : 'Cobrar')}
                                         </button>
                                       </div>
                                     )}
@@ -2009,7 +2052,7 @@ export default function App() {
                                 </div>
                                 <div className="flex justify-between mt-2 text-[10px] md:text-[11px] font-bold text-zinc-400 uppercase tracking-widest">
                                   <span>{percentage.toFixed(0)}%</span>
-                                  <span className="text-zinc-600">R$ {price.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</span>
+                                  <span className="text-zinc-600">{language === 'pt' ? 'R$' : (language === 'en' ? '$' : '€')} {price.toLocaleString(language === 'en' ? 'en-US' : (language === 'es' ? 'es-ES' : 'pt-BR'), { minimumFractionDigits: 2 })}</span>
                                 </div>
                               </div>
                             );
@@ -2018,10 +2061,10 @@ export default function App() {
 
                         {/* Individual Payment History */}
                         <div className="space-y-4">
-                          <h4 className="text-sm font-bold text-zinc-500 uppercase tracking-wider px-1">Histórico de Pagamentos</h4>
+                          <h4 className="text-sm font-bold text-zinc-500 uppercase tracking-wider px-1">{language === 'pt' ? 'Histórico de Pagamentos' : (language === 'en' ? 'Payment History' : 'Historial de Pagos')}</h4>
                           {payments.filter(p => p.eventId === selectedEventId).length === 0 ? (
                             <div className="text-center py-8 bg-zinc-50 rounded-2xl border border-dashed border-zinc-200">
-                              <p className="text-zinc-500 text-sm italic">Nenhum pagamento registrado para este evento.</p>
+                              <p className="text-zinc-500 text-sm italic">{language === 'pt' ? 'Nenhum pagamento registrado para este evento.' : (language === 'en' ? 'No payment registered for this event.' : 'Ningún pago registrado para este evento.')}</p>
                             </div>
                           ) : (
                             <div className="grid gap-3">
@@ -2053,7 +2096,7 @@ export default function App() {
                                         </div>
                                         <div>
                                           <p className="font-bold text-zinc-900 text-sm md:text-base">{person?.name || 'Pessoa excluída'}</p>
-                                          <p className="text-xs text-emerald-600 font-medium">R$ {payment.amountPaid.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</p>
+                                          <p className="text-xs text-emerald-600 font-medium">{language === 'pt' ? 'R$' : (language === 'en' ? '$' : '€')} {payment.amountPaid.toLocaleString(language === 'en' ? 'en-US' : (language === 'es' ? 'es-ES' : 'pt-BR'), { minimumFractionDigits: 2 })}</p>
                                         </div>
                                       </div>
                                       <div className="flex gap-1 md:opacity-0 md:group-hover:opacity-100 transition-opacity">
@@ -2201,7 +2244,7 @@ export default function App() {
                 <div className="p-6 border-b border-zinc-100 flex items-center justify-between bg-zinc-50/50">
                   <h2 className="text-xl font-bold text-zinc-900 flex items-center gap-2">
                     <User className="w-5 h-5 text-indigo-600" />
-                    {editingPersonId ? 'Editar Pessoa' : 'Nova Pessoa'}
+                    {editingPersonId ? t('editEvent') : t('newPerson')}
                   </h2>
                   <button
                     onClick={() => {
@@ -2218,7 +2261,7 @@ export default function App() {
                 <form onSubmit={handlePersonSubmit} className="p-6 space-y-5">
                   <div>
                     <label htmlFor="targetEventId" className="block text-sm font-medium text-zinc-700 mb-1">
-                      Evento
+                      {t('events')}
                     </label>
                     <div className="relative">
                       <Calendar className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-400" />
@@ -2229,10 +2272,10 @@ export default function App() {
                         onChange={e => setPersonFormData(prev => ({ ...prev, eventId: e.target.value }))}
                         className="w-full pl-10 pr-4 py-2.5 bg-zinc-50 border border-zinc-200 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none transition-all appearance-none"
                       >
-                        <option value="">Selecione um evento...</option>
+                        <option value="">{language === 'pt' ? 'Selecione um evento...' : (language === 'en' ? 'Select an event...' : 'Seleccione un evento...')}</option>
                         {events.map(event => (
                           <option key={event.id} value={event.id}>
-                            {event.name} ({new Date(event.date).toLocaleDateString('pt-BR')})
+                            {event.name} ({new Date(event.date).toLocaleDateString(language === 'en' ? 'en-US' : (language === 'es' ? 'es-ES' : 'pt-BR'))})
                           </option>
                         ))}
                       </select>
@@ -2241,7 +2284,7 @@ export default function App() {
 
                   <div>
                     <label htmlFor="personName" className="block text-sm font-medium text-zinc-700 mb-1">
-                      Nome Completo
+                      {t('passengerName')}
                     </label>
                     <div className="relative">
                       <User className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-400" />
@@ -2251,7 +2294,7 @@ export default function App() {
                         required
                         value={personFormData.name}
                         onChange={e => setPersonFormData(prev => ({ ...prev, name: e.target.value }))}
-                        placeholder="Ex: João Silva"
+                        placeholder={language === 'pt' ? "Ex: João Silva" : (language === 'en' ? "Ex: John Doe" : "Ej: Juan Pérez")}
                         className="w-full pl-10 pr-4 py-2.5 bg-zinc-50 border border-zinc-200 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none transition-all"
                       />
                     </div>
@@ -2259,7 +2302,7 @@ export default function App() {
 
                   <div>
                     <label htmlFor="phone" className="block text-sm font-medium text-zinc-700 mb-1">
-                      Telefone / WhatsApp
+                      {t('phone')}
                     </label>
                     <div className="relative">
                       <Phone className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-400" />
@@ -2269,7 +2312,7 @@ export default function App() {
                         required
                         value={personFormData.phone}
                         onChange={e => setPersonFormData(prev => ({ ...prev, phone: e.target.value }))}
-                        placeholder="Ex: (11) 99999-9999"
+                        placeholder={language === 'pt' ? "Ex: (11) 99999-9999" : "(00) 00000-0000"}
                         className="w-full pl-10 pr-4 py-2.5 bg-zinc-50 border border-zinc-200 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none transition-all"
                       />
                     </div>
@@ -2285,7 +2328,7 @@ export default function App() {
                     </button>
                     <div className="flex items-center gap-2">
                       <Shield className={`w-4 h-4 ${personFormData.isCaptain ? 'text-indigo-600' : 'text-zinc-400'}`} />
-                      <span className="text-sm font-medium text-zinc-700">Definir como Capitão</span>
+                      <span className="text-sm font-medium text-zinc-700">{t('defineCaptain')}</span>
                     </div>
                   </div>
 
@@ -2294,7 +2337,7 @@ export default function App() {
                     className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-semibold py-3.5 rounded-2xl shadow-lg shadow-indigo-200 transition-all flex items-center justify-center gap-2 active:scale-[0.98]"
                   >
                     {editingPersonId ? <Edit2 className="w-5 h-5" /> : <Plus className="w-5 h-5" />}
-                    {editingPersonId ? 'Salvar Alterações' : 'Adicionar à Lista'}
+                    {editingPersonId ? t('save') : t('register')}
                   </button>
                 </form>
               </motion.div>
@@ -2629,7 +2672,7 @@ export default function App() {
                     <div className="bg-indigo-100 p-2 rounded-xl text-indigo-600">
                       <Settings className="w-5 h-5" />
                     </div>
-                    <h3 className="text-lg font-bold text-zinc-900">Configurações de Cobrança</h3>
+                    <h3 className="text-lg font-bold text-zinc-900">{t('settings')}</h3>
                   </div>
                   <button
                     onClick={() => setShowSettingsModal(false)}
@@ -2637,6 +2680,29 @@ export default function App() {
                   >
                     <X className="w-5 h-5" />
                   </button>
+                </div>
+
+                <div className="px-6 pt-6 border-b border-zinc-100 pb-6">
+                   <label className="block text-xs font-bold text-zinc-400 uppercase tracking-widest mb-3 flex items-center gap-2">
+                     <Languages className="w-4 h-4" />
+                     {t('language')}
+                   </label>
+                   <div className="grid grid-cols-3 gap-2">
+                     {(['pt', 'en', 'es'] as Language[]).map((lang) => (
+                       <button
+                         key={lang}
+                         type="button"
+                         onClick={() => setLanguage(lang)}
+                         className={`py-2.5 rounded-xl border-2 font-bold text-xs transition-all active:scale-95 ${
+                           language === lang
+                             ? 'border-indigo-600 bg-indigo-50 text-indigo-600 shadow-md'
+                             : 'border-zinc-100 bg-zinc-50 text-zinc-400 hover:border-zinc-200'
+                         }`}
+                       >
+                         {lang === 'pt' ? 'Português' : lang === 'en' ? 'English' : 'Español'}
+                       </button>
+                     ))}
+                   </div>
                 </div>
 
                 <form onSubmit={saveSettings} className="p-6 space-y-6">
